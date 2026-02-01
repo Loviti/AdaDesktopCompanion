@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ada — Desktop Companion</title>
+<style>
+:root {
+  --bg: #0a0e17;
+  --panel: rgba(16, 22, 36, 0.92);
+  --panel-border: rgba(0, 255, 204, 0.12);
+  --accent: #00ffcc;
+  --accent-dim: #00b894;
+  --accent-glow: rgba(0, 255, 204, 0.15);
+  --text: #e0e8f0;
+  --text-dim: rgba(224, 232, 240, 0.5);
+  --danger: #ff6b6b;
+  --warning: #ffd93d;
+  --success: #00ffcc;
+  --purple: #a855f7;
+  --orange: #ff8c00;
+  --radius: 10px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+/* ── Layout ── */
+.app {
+  display: grid;
+  grid-template-columns: 340px 1fr 300px;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+  gap: 0;
+}
+
+.header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.header h1 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.5px;
+}
+
+.header h1 span { font-weight: 400; opacity: 0.6; }
+
+.status-bar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 5px;
+}
+
+.status-dot.on { background: var(--success); box-shadow: 0 0 8px var(--success); }
+.status-dot.off { background: var(--danger); }
+.status-dot.warn { background: var(--warning); }
+
+/* ── Panels ── */
+.panel {
+  background: var(--panel);
+  border-right: 1px solid var(--panel-border);
+  padding: 16px;
+  overflow-y: auto;
+  max-height: calc(100vh - 52px);
+}
+
+.panel:last-child { border-right: none; border-left: 1px solid var(--panel-border); }
+
+.panel-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent-dim);
+  margin-bottom: 14px;
+  font-weight: 600;
+}
+
+/* ── Controls ── */
+.control {
+  margin-bottom: 14px;
+}
+
+.control label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+}
+
+.control label .val {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.08);
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: 0 0 6px var(--accent-glow);
+  transition: transform 0.15s;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.3);
+}
+
+select {
+  width: 100%;
+  padding: 7px 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+  outline: none;
+}
+
+select:focus { border-color: var(--accent); }
+
+input[type="color"] {
+  width: 100%;
+  height: 32px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+}
+
+/* ── Buttons ── */
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.btn {
+  padding: 6px 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: var(--radius);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: var(--font);
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.btn.mood {
+  font-size: 0.72rem;
+  padding: 5px 10px;
+}
+
+.btn.danger:hover {
+  background: rgba(255,107,107,0.15);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ── Canvas Preview ── */
+.preview-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  position: relative;
+}
+
+#previewCanvas {
+  border-radius: 50%;
+  border: 2px solid var(--panel-border);
+  box-shadow: 0 0 40px rgba(0, 255, 204, 0.08);
+  background: #000;
+  max-width: 100%;
+}
+
+.preview-label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-top: 12px;
+  text-align: center;
+}
+
+.mode-indicator {
+  position: absolute;
+  top: 30px;
+  right: 30px;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid var(--panel-border);
+  color: var(--accent);
+}
+
+/* ── Right Panel ── */
+.section { margin-bottom: 20px; }
+
+.section-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.chat-area {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius);
+  padding: 10px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 0.78rem;
+  margin-bottom: 8px;
+}
+
+.chat-msg { margin-bottom: 6px; line-height: 1.4; }
+.chat-msg .role { font-weight: 600; }
+.chat-msg .role.user { color: var(--accent); }
+.chat-msg .role.ada { color: var(--purple); }
+
+.text-input-row {
+  display: flex;
+  gap: 6px;
+}
+
+.text-input-row input {
+  flex: 1;
+  padding: 7px 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.82rem;
+  outline: none;
+}
+
+.text-input-row input:focus { border-color: var(--accent); }
+
+.text-input-row button {
+  padding: 7px 14px;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+/* Image upload */
+.upload-zone {
+  border: 2px dashed rgba(255,255,255,0.12);
+  border-radius: var(--radius);
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.upload-zone:hover {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.upload-zone svg { margin-bottom: 6px; }
+
+/* Log area */
+.log-area {
+  background: rgba(0,0,0,0.4);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  max-height: 120px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.log-entry.info { color: var(--text-dim); }
+.log-entry.success { color: var(--success); }
+.log-entry.error { color: var(--danger); }
+.log-entry.warn { color: var(--warning); }
+
+/* Divider */
+hr {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  margin: 14px 0;
+}
+
+/* Responsive */
+@media (max-width: 1100px) {
+  .app {
+    grid-template-columns: 300px 1fr;
+  }
+  .panel:last-child {
+    grid-column: 1 / -1;
+    border-left: none;
+    border-top: 1px solid var(--panel-border);
+    max-height: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+  .panel { max-height: none; border: none; border-bottom: 1px solid var(--panel-border); }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Header -->
+  <div class="header">
+    <h1>🦝 Ada <span>Desktop Companion</span></h1>
+    <div class="status-bar">
+      <span><span class="status-dot off" id="dotServer"></span>Server</span>
+      <span><span class="status-dot off" id="dotEsp32"></span>ESP32</span>
+      <span><span class="status-dot off" id="dotBrain"></span>Brain</span>
+      <span id="modeLabel" style="font-family:var(--mono);color:var(--accent)">IDLE</span>
+    </div>
+  </div>
+
+  <!-- Left Panel: Particle Controls -->
+  <div class="panel" id="leftPanel">
+    <div class="panel-title">Particle Controls</div>
+
+    <div class="control">
+      <label>Particle Count <span class="val" id="valCount">800</span></label>
+      <input type="range" id="sliderCount" min="100" max="1500" value="800" step="50">
+    </div>
+    <div class="control">
+      <label>Particle Size <span class="val" id="valSize">3.0</span></label>
+      <input type="range" id="sliderSize" min="0.5" max="8" value="3" step="0.1">
+    </div>
+    <div class="control">
+      <label>Speed <span class="val" id="valSpeed">1.0</span></label>
+      <input type="range" id="sliderSpeed" min="0.1" max="5" value="1" step="0.1">
+    </div>
+    <div class="control">
+      <label>Dispersion <span class="val" id="valDispersion">30</span></label>
+      <input type="range" id="sliderDispersion" min="1" max="200" value="30" step="1">
+    </div>
+    <div class="control">
+      <label>Opacity <span class="val" id="valOpacity">1.0</span></label>
+      <input type="range" id="sliderOpacity" min="0" max="1" value="1" step="0.05">
+    </div>
+    <div class="control">
+      <label>Pulse Speed <span class="val" id="valPulse">1.0</span></label>
+      <input type="range" id="sliderPulse" min="0.1" max="5" value="1" step="0.1">
+    </div>
+    <div class="control">
+      <label>Rotation <span class="val" id="valRotation">0.0</span></label>
+      <input type="range" id="sliderRotation" min="-10" max="10" value="0" step="0.1">
+    </div>
+
+    <hr>
+
+    <div class="control">
+      <label>Link Count <span class="val" id="valLinks">0</span></label>
+      <input type="range" id="sliderLinks" min="0" max="100" value="0" step="1">
+    </div>
+    <div class="control">
+      <label>Link Opacity <span class="val" id="valLinkOpacity">0.2</span></label>
+      <input type="range" id="sliderLinkOpacity" min="0" max="1" value="0.2" step="0.05">
+    </div>
+
+    <hr>
+
+    <div class="control">
+      <label>Shape</label>
+      <select id="selectShape">
+        <option value="circle" selected>Circle</option>
+        <option value="square">Square</option>
+        <option value="star">Star</option>
+      </select>
+    </div>
+
+    <div class="control">
+      <label>Animation</label>
+      <select id="selectAnimation">
+        <option value="float" selected>Float</option>
+        <option value="drift">Drift</option>
+        <option value="swirl_inward">Swirl Inward</option>
+        <option value="pulse_outward">Pulse Outward</option>
+      </select>
+    </div>
+
+    <div class="control">
+      <label>Background Color</label>
+      <input type="color" id="bgColor" value="#000000">
+    </div>
+
+    <hr>
+    <div class="panel-title">Mode</div>
+    <div class="btn-row" id="modeButtons">
+      <button class="btn active" data-mode="IDLE">IDLE</button>
+      <button class="btn" data-mode="LISTENING">LISTEN</button>
+      <button class="btn" data-mode="THINKING">THINK</button>
+      <button class="btn" data-mode="TALKING">TALK</button>
+      <button class="btn" data-mode="SLEEPING">SLEEP</button>
+    </div>
+
+    <div class="panel-title">Mood Presets</div>
+    <div class="btn-row" id="moodButtons">
+      <button class="btn mood" data-mood="neutral">😐 neutral</button>
+      <button class="btn mood" data-mood="happy">😊 happy</button>
+      <button class="btn mood" data-mood="excited">🎉 excited</button>
+      <button class="btn mood" data-mood="sarcastic">😏 sarcastic</button>
+      <button class="btn mood" data-mood="curious">🤔 curious</button>
+      <button class="btn mood" data-mood="sleepy">😴 sleepy</button>
+      <button class="btn mood" data-mood="chaotic">😈 chaotic</button>
+      <button class="btn mood" data-mood="cozy">☕ cozy</button>
+    </div>
+
+    <hr>
+    <div class="btn-row">
+      <button class="btn danger" id="btnClear">✖ Clear</button>
+      <button class="btn" id="btnPattern" data-pattern="raccoon">🦝 Raccoon</button>
+      <button class="btn" id="btnPatternOrb" data-pattern="orb">🔮 Orb</button>
+      <button class="btn" id="btnPatternAurora" data-pattern="aurora">🌌 Aurora</button>
+    </div>
+  </div>
+
+  <!-- Center: Preview Canvas -->
+  <div class="preview-area">
+    <div class="mode-indicator" id="previewMode">IDLE</div>
+    <canvas id="previewCanvas" width="400" height="400"></canvas>
+    <div class="preview-label">Live Particle Preview (approximate)</div>
+  </div>
+
+  <!-- Right Panel -->
+  <div class="panel" id="rightPanel">
+    <div class="section">
+      <div class="panel-title">Image Upload</div>
+      <div class="upload-zone" id="uploadZone">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <div>Drop image or click</div>
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="panel-title">Chat with Ada</div>
+      <div class="chat-area" id="chatArea">
+        <div class="chat-msg"><span class="role ada">ada:</span> *stretches* hey, I'm alive! 🦝</div>
+      </div>
+      <div class="text-input-row">
+        <input type="text" id="textInput" placeholder="Say something to Ada..." autocomplete="off">
+        <button id="btnSend">→</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="panel-title">Event Log</div>
+      <div class="log-area" id="logArea"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ───
+const state = {
+  wsConnected: false,
+  esp32Connected: false,
+  brainAvailable: false,
+  mode: 'IDLE',
+  config: {
+    particle_count: 800,
+    particle_size: 3.0,
+    particle_speed: 1.0,
+    dispersion: 30.0,
+    opacity: 1.0,
+    shape: 'circle',
+    animation: 'float',
+    pulse_speed: 1.0,
+    rotation_speed: 0.0,
+    bg_color: '#000000',
+    link_count: 0,
+    link_opacity: 0.2
+  }
+};
+
+// ─── WebSocket ───
+let ws = null;
+let reconnectTimer = null;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}/ws`;
+  log('info', `Connecting to ${url}...`);
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    state.wsConnected = true;
+    updateDot('dotServer', 'on');
+    log('success', 'WebSocket connected');
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  };
+
+  ws.onclose = () => {
+    state.wsConnected = false;
+    updateDot('dotServer', 'off');
+    log('warn', 'WebSocket disconnected — reconnecting...');
+    reconnectTimer = setTimeout(connectWS, 2000);
+  };
+
+  ws.onerror = () => {
+    log('error', 'WebSocket error');
+  };
+
+  ws.onmessage = (evt) => {
+    try {
+      const data = JSON.parse(evt.data);
+      handleServerMessage(data);
+    } catch (e) {
+      log('error', 'Bad message from server');
+    }
+  };
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// ─── Server Message Handler ───
+function handleServerMessage(data) {
+  if (data.type === 'full_state') {
+    // Initial state
+    state.esp32Connected = data.esp32_connected;
+    state.brainAvailable = data.brain_available;
+    state.mode = data.mode || 'IDLE';
+    updateDot('dotEsp32', data.esp32_connected ? 'on' : 'off');
+    updateDot('dotBrain', data.brain_available ? 'on' : 'warn');
+    if (data.config) {
+      Object.assign(state.config, data.config);
+      syncSlidersFromConfig();
+    }
+    updateModeUI();
+    log('info', 'State synced');
+  }
+  else if (data.type === 'state_update') {
+    state.esp32Connected = data.esp32_connected;
+    state.mode = data.mode || state.mode;
+    updateDot('dotEsp32', data.esp32_connected ? 'on' : 'off');
+    updateModeUI();
+  }
+  else if (data.type === 'brain_response') {
+    addChat('user', data.input);
+    addChat('ada', data.response);
+  }
+}
+
+// ─── UI Helpers ───
+function updateDot(id, cls) {
+  const el = document.getElementById(id);
+  el.className = 'status-dot ' + cls;
+}
+
+function updateModeUI() {
+  document.getElementById('modeLabel').textContent = state.mode;
+  document.getElementById('previewMode').textContent = state.mode;
+  document.querySelectorAll('#modeButtons .btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === state.mode);
+  });
+}
+
+function log(level, msg) {
+  const area = document.getElementById('logArea');
+  const time = new Date().toLocaleTimeString('en-US', {hour12: false});
+  area.innerHTML += `<div class="log-entry ${level}">${time} ${msg}</div>`;
+  area.scrollTop = area.scrollHeight;
+  // Trim old entries
+  while (area.children.length > 100) area.removeChild(area.firstChild);
+}
+
+function addChat(role, text) {
+  const area = document.getElementById('chatArea');
+  const div = document.createElement('div');
+  div.className = 'chat-msg';
+  div.innerHTML = `<span class="role ${role}">${role}:</span> ${escapeHtml(text)}`;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─── Build Config from Sliders ───
+function buildConfig() {
+  return {
+    particle_count: parseInt(sliderCount.value),
+    particle_size: parseFloat(sliderSize.value),
+    particle_speed: parseFloat(sliderSpeed.value),
+    dispersion: parseFloat(sliderDispersion.value),
+    opacity: parseFloat(sliderOpacity.value),
+    shape: selectShape.value,
+    animation: selectAnimation.value,
+    pulse_speed: parseFloat(sliderPulse.value),
+    rotation_speed: parseFloat(sliderRotation.value),
+    bg_color: bgColor.value,
+    link_count: parseInt(sliderLinks.value),
+    link_opacity: parseFloat(sliderLinkOpacity.value)
+  };
+}
+
+function syncSlidersFromConfig() {
+  const c = state.config;
+  sliderCount.value = c.particle_count;
+  sliderSize.value = c.particle_size;
+  sliderSpeed.value = c.particle_speed;
+  sliderDispersion.value = c.dispersion;
+  sliderOpacity.value = c.opacity;
+  sliderPulse.value = c.pulse_speed;
+  sliderRotation.value = c.rotation_speed;
+  sliderLinks.value = c.link_count;
+  sliderLinkOpacity.value = c.link_opacity;
+  selectShape.value = c.shape || 'circle';
+  selectAnimation.value = c.animation || 'float';
+  bgColor.value = c.bg_color || '#000000';
+  updateAllValues();
+}
+
+function updateAllValues() {
+  valCount.textContent = sliderCount.value;
+  valSize.textContent = parseFloat(sliderSize.value).toFixed(1);
+  valSpeed.textContent = parseFloat(sliderSpeed.value).toFixed(1);
+  valDispersion.textContent = sliderDispersion.value;
+  valOpacity.textContent = parseFloat(sliderOpacity.value).toFixed(2);
+  valPulse.textContent = parseFloat(sliderPulse.value).toFixed(1);
+  valRotation.textContent = parseFloat(sliderRotation.value).toFixed(1);
+  valLinks.textContent = sliderLinks.value;
+  valLinkOpacity.textContent = parseFloat(sliderLinkOpacity.value).toFixed(2);
+}
+
+// ─── Send mood config (debounced) ───
+let moodSendTimer = null;
+function sendMoodUpdate() {
+  if (moodSendTimer) return;
+  const conf = buildConfig();
+  Object.assign(state.config, conf);
+  send({ type: 'mood_update', config: conf });
+  moodSendTimer = setTimeout(() => { moodSendTimer = null; }, 100);
+}
+
+// ─── Slider Bindings ───
+const sliderCount = document.getElementById('sliderCount');
+const sliderSize = document.getElementById('sliderSize');
+const sliderSpeed = document.getElementById('sliderSpeed');
+const sliderDispersion = document.getElementById('sliderDispersion');
+const sliderOpacity = document.getElementById('sliderOpacity');
+const sliderPulse = document.getElementById('sliderPulse');
+const sliderRotation = document.getElementById('sliderRotation');
+const sliderLinks = document.getElementById('sliderLinks');
+const sliderLinkOpacity = document.getElementById('sliderLinkOpacity');
+const selectShape = document.getElementById('selectShape');
+const selectAnimation = document.getElementById('selectAnimation');
+const bgColor = document.getElementById('bgColor');
+
+const valCount = document.getElementById('valCount');
+const valSize = document.getElementById('valSize');
+const valSpeed = document.getElementById('valSpeed');
+const valDispersion = document.getElementById('valDispersion');
+const valOpacity = document.getElementById('valOpacity');
+const valPulse = document.getElementById('valPulse');
+const valRotation = document.getElementById('valRotation');
+const valLinks = document.getElementById('valLinks');
+const valLinkOpacity = document.getElementById('valLinkOpacity');
+
+// Attach input events to all sliders and selects
+[sliderCount, sliderSize, sliderSpeed, sliderDispersion, sliderOpacity,
+ sliderPulse, sliderRotation, sliderLinks, sliderLinkOpacity,
+ selectShape, selectAnimation, bgColor].forEach(el => {
+  el.addEventListener('input', () => {
+    updateAllValues();
+    sendMoodUpdate();
+  });
+});
+
+// ─── Mode Buttons ───
+document.querySelectorAll('#modeButtons .btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    state.mode = btn.dataset.mode;
+    updateModeUI();
+    send({ type: 'set_mode', mode: btn.dataset.mode });
+    log('info', `Mode → ${btn.dataset.mode}`);
+  });
+});
+
+// ─── Mood Presets ───
+document.querySelectorAll('#moodButtons .btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    send({ type: 'set_mood', mood: btn.dataset.mood });
+    log('info', `Mood → ${btn.dataset.mood}`);
+  });
+});
+
+// ─── Pattern Buttons ───
+document.querySelectorAll('[data-pattern]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    send({ type: 'pattern', name: btn.dataset.pattern });
+    log('info', `Pattern → ${btn.dataset.pattern}`);
+  });
+});
+
+// ─── Clear ───
+document.getElementById('btnClear').addEventListener('click', () => {
+  send({ type: 'clear' });
+  log('warn', 'Particles cleared');
+});
+
+// ─── Text Input ───
+const textInput = document.getElementById('textInput');
+document.getElementById('btnSend').addEventListener('click', sendText);
+textInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendText();
+});
+
+function sendText() {
+  const text = textInput.value.trim();
+  if (!text) return;
+  send({ type: 'text_input', text });
+  addChat('user', text);
+  textInput.value = '';
+  log('info', `Sent: "${text.substring(0, 40)}..."`);
+}
+
+// ─── Image Upload ───
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.style.borderColor = 'var(--accent)'; });
+uploadZone.addEventListener('dragleave', () => { uploadZone.style.borderColor = ''; });
+uploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadZone.style.borderColor = '';
+  if (e.dataTransfer.files.length) processImage(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) processImage(fileInput.files[0]);
+});
+
+function processImage(file) {
+  log('info', `Processing image: ${file.name}`);
+  const img = new Image();
+  img.onload = () => {
+    // Draw to 128x128 canvas and extract RGB
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 128;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, 128, 128);
+    const imageData = ctx.getImageData(0, 0, 128, 128);
+    const rgba = imageData.data;
+
+    // Convert RGBA to RGB
+    const rgb = new Uint8Array(128 * 128 * 3);
+    for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+      rgb[j] = rgba[i];
+      rgb[j+1] = rgba[i+1];
+      rgb[j+2] = rgba[i+2];
+    }
+
+    // Base64 encode
+    let binary = '';
+    for (let i = 0; i < rgb.length; i++) binary += String.fromCharCode(rgb[i]);
+    const b64 = btoa(binary);
+
+    send({
+      type: 'particles',
+      image: b64,
+      width: 128,
+      height: 128,
+      config: buildConfig()
+    });
+    log('success', `Image sent as particles (128x128)`);
+
+    // Update preview source image
+    previewSourceImage = imageData;
+    initPreviewParticles();
+  };
+  img.src = URL.createObjectURL(file);
+}
+
+// ─── Live Particle Preview ───
+const canvas = document.getElementById('previewCanvas');
+const pCtx = canvas.getContext('2d');
+
+let previewParticles = [];
+let previewSourceImage = null;
+let animFrame;
+
+class PreviewParticle {
+  constructor(x, y, r, g, b) {
+    this.homeX = x;
+    this.homeY = y;
+    this.x = x + (Math.random() - 0.5) * 40;
+    this.y = y + (Math.random() - 0.5) * 40;
+    this.r = r; this.g = g; this.b = b;
+    this.vx = 0; this.vy = 0;
+    this.phase = Math.random() * Math.PI * 2;
+    this.size = 2;
+  }
+
+  update(config, time) {
+    const speed = config.particle_speed * 0.3;
+    const disp = config.dispersion;
+    const anim = config.animation;
+    const pulse = config.pulse_speed;
+    const rot = config.rotation_speed * 0.01;
+
+    // Target position based on animation
+    let tx = this.homeX, ty = this.homeY;
+
+    if (anim === 'float') {
+      tx += Math.sin(time * 0.5 + this.phase) * disp * 0.3;
+      ty += Math.cos(time * 0.7 + this.phase) * disp * 0.2;
+    } else if (anim === 'drift') {
+      tx += Math.sin(time * 0.2 + this.phase) * disp * 0.5;
+      ty += Math.cos(time * 0.15 + this.phase * 0.7) * disp * 0.3;
+    } else if (anim === 'swirl_inward') {
+      const angle = time * 0.5 + this.phase;
+      const r = 10 + disp * 0.3 * (0.5 + 0.5 * Math.sin(time * 0.3 + this.phase));
+      tx = 200 + Math.cos(angle) * r;
+      ty = 200 + Math.sin(angle) * r;
+    } else if (anim === 'pulse_outward') {
+      const pulseFactor = 1.0 + 0.3 * Math.sin(time * pulse + this.phase);
+      const dx = this.homeX - 200, dy = this.homeY - 200;
+      tx = 200 + dx * pulseFactor;
+      ty = 200 + dy * pulseFactor;
+    }
+
+    // Rotation around center
+    if (Math.abs(rot) > 0.001) {
+      const cx = 200, cy = 200;
+      const dx = tx - cx, dy = ty - cy;
+      const cosR = Math.cos(rot), sinR = Math.sin(rot);
+      tx = cx + dx * cosR - dy * sinR;
+      ty = cy + dx * sinR + dy * cosR;
+    }
+
+    // Spring towards target
+    this.vx += (tx - this.x) * 0.05 * speed;
+    this.vy += (ty - this.y) * 0.05 * speed;
+    this.vx *= 0.85;
+    this.vy *= 0.85;
+    this.x += this.vx;
+    this.y += this.vy;
+
+    this.size = config.particle_size * (0.8 + 0.2 * Math.sin(time * pulse + this.phase));
+  }
+}
+
+function initPreviewParticles() {
+  previewParticles = [];
+  const count = Math.min(state.config.particle_count, 600); // cap for perf
+
+  if (previewSourceImage) {
+    const d = previewSourceImage.data;
+    const w = previewSourceImage.width;
+    const h = previewSourceImage.height;
+    const scaleX = 400 / w;
+    const scaleY = 400 / h;
+
+    for (let i = 0; i < count; i++) {
+      const px = Math.floor(Math.random() * w);
+      const py = Math.floor(Math.random() * h);
+      const idx = (py * w + px) * 4;
+      const r = d[idx], g = d[idx+1], b = d[idx+2];
+      if (r + g + b < 15) { i--; continue; } // skip pure black
+      previewParticles.push(new PreviewParticle(px * scaleX, py * scaleY, r, g, b));
+    }
+  } else {
+    // Default: generate teal particles in a circle
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const rad = Math.random() * 120;
+      const x = 200 + Math.cos(angle) * rad;
+      const y = 200 + Math.sin(angle) * rad;
+      const t = rad / 120;
+      const r = Math.floor(20 + t * 60);
+      const g = Math.floor(200 - t * 80);
+      const b = Math.floor(180 - t * 40);
+      previewParticles.push(new PreviewParticle(x, y, r, g, b));
+    }
+  }
+}
+
+function renderPreview(time) {
+  const t = time * 0.001;
+  const cfg = state.config;
+
+  // Parse bg color
+  const bg = cfg.bg_color || '#000000';
+  pCtx.fillStyle = bg;
+  pCtx.fillRect(0, 0, 400, 400);
+
+  // Draw links
+  if (cfg.link_count > 0) {
+    const maxDist = 30;
+    pCtx.strokeStyle = `rgba(0,255,204,${cfg.link_opacity * 0.5})`;
+    pCtx.lineWidth = 0.5;
+    for (let i = 0; i < Math.min(previewParticles.length, 100); i++) {
+      const p = previewParticles[i];
+      let links = 0;
+      for (let j = i + 1; j < previewParticles.length && links < cfg.link_count / 20; j++) {
+        const q = previewParticles[j];
+        const dx = p.x - q.x, dy = p.y - q.y;
+        if (Math.abs(dx) < maxDist && Math.abs(dy) < maxDist) {
+          pCtx.beginPath();
+          pCtx.moveTo(p.x, p.y);
+          pCtx.lineTo(q.x, q.y);
+          pCtx.stroke();
+          links++;
+        }
+      }
+    }
+  }
+
+  // Update and draw particles
+  for (const p of previewParticles) {
+    p.update(cfg, t);
+
+    const alpha = cfg.opacity;
+    pCtx.fillStyle = `rgba(${p.r},${p.g},${p.b},${alpha})`;
+
+    if (cfg.shape === 'circle') {
+      pCtx.beginPath();
+      pCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      pCtx.fill();
+    } else if (cfg.shape === 'square') {
+      pCtx.fillRect(p.x - p.size, p.y - p.size, p.size * 2, p.size * 2);
+    } else if (cfg.shape === 'star') {
+      drawStar(pCtx, p.x, p.y, p.size);
+    }
+  }
+
+  animFrame = requestAnimationFrame(renderPreview);
+}
+
+function drawStar(ctx, x, y, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const angle = (i * 4 * Math.PI / 5) - Math.PI / 2;
+    const px = x + Math.cos(angle) * r;
+    const py = y + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+// ─── Init ───
+initPreviewParticles();
+renderPreview(0);
+connectWS();
+updateAllValues();
+
+// Reinit particles when count changes significantly
+let lastParticleCount = state.config.particle_count;
+setInterval(() => {
+  const c = parseInt(sliderCount.value);
+  if (Math.abs(c - lastParticleCount) > 50) {
+    lastParticleCount = c;
+    initPreviewParticles();
+  }
+}, 500);
+</script>
+</body>
+</html>

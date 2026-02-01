@@ -1,199 +1,126 @@
 """
-Ada Desktop Companion - Image Generation
+Ada Desktop Companion - Image Generation (Graceful Degradation)
 
-Uses SD-Turbo (stabilityai/sd-turbo) for single-step diffusion image generation.
-Generates small images (128x128) that get decomposed into particles on the ESP32 belly screen.
-
-This is how Ada visualizes her thoughts — turning prompts into living particle clouds.
+Tries to use SD-Turbo if torch/diffusers are available.
+Falls back to test_patterns if not — server runs either way.
 """
 
 import asyncio
 import logging
 from typing import Optional
 
-import torch
-
 import config
 
 logger = logging.getLogger("ada.image_gen")
 
-# Module-level model cache
 _pipeline = None
 _pipeline_lock = asyncio.Lock()
+_torch_available = False
+
+try:
+    import torch
+    _torch_available = True
+except ImportError:
+    logger.info("torch not available — image generation disabled, using test patterns")
 
 
 async def initialize():
-    """
-    Load the image generation model into VRAM at startup.
-    Call this once during server init — model stays resident.
-    """
+    """Load image gen model if torch/diffusers available."""
     global _pipeline
+
+    if not _torch_available:
+        logger.info("Skipping image gen init (torch not installed)")
+        return
 
     async with _pipeline_lock:
         if _pipeline is not None:
-            logger.info("Image gen model already loaded")
             return
 
         logger.info(f"Loading image gen model: {config.IMAGE_GEN_MODEL}")
-        logger.info(f"Target resolution: {config.IMAGE_GEN_WIDTH}x{config.IMAGE_GEN_HEIGHT}")
-
-        # Run the heavy model load in a thread to not block the event loop
-        _pipeline = await asyncio.get_event_loop().run_in_executor(None, _load_pipeline)
-
-        if _pipeline is not None:
-            logger.info("Image gen model loaded and ready in VRAM")
-        else:
-            logger.error("Failed to load image gen model")
+        try:
+            _pipeline = await asyncio.get_event_loop().run_in_executor(None, _load_pipeline)
+            if _pipeline:
+                logger.info("Image gen model loaded")
+            else:
+                logger.warning("Image gen model failed to load")
+        except Exception as e:
+            logger.warning(f"Image gen init failed: {e}")
 
 
 def _load_pipeline():
-    """
-    Synchronous model loading. Tries SD-Turbo first, falls back to smaller models.
-    """
-    from diffusers import AutoPipelineForText2Image
-
-    models_to_try = [
-        config.IMAGE_GEN_MODEL,
-        "segmind/small-sd",  # Fallback: smaller model
-    ]
-
-    for model_id in models_to_try:
+    """Synchronous model loading."""
+    if not _torch_available:
+        return None
+    try:
+        from diffusers import AutoPipelineForText2Image
+        pipe = AutoPipelineForText2Image.from_pretrained(
+            config.IMAGE_GEN_MODEL,
+            torch_dtype=torch.float16,
+            variant="fp16",
+        )
+        pipe = pipe.to("cuda")
+        pipe.set_progress_bar_config(disable=True)
         try:
-            logger.info(f"Attempting to load: {model_id}")
-
-            pipe = AutoPipelineForText2Image.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16,
-                variant="fp16",
-            )
-            pipe = pipe.to("cuda")
-
-            # Optimizations for speed
-            pipe.set_progress_bar_config(disable=True)
-
-            # Try to enable memory-efficient attention
-            try:
-                pipe.enable_xformers_memory_efficient_attention()
-                logger.info("xformers memory-efficient attention enabled")
-            except Exception:
-                logger.info("xformers not available, using default attention")
-
-            # Warmup with a tiny generation
-            logger.info("Warming up pipeline...")
-            _ = pipe(
-                prompt="test",
-                num_inference_steps=config.IMAGE_GEN_STEPS,
-                guidance_scale=config.IMAGE_GEN_GUIDANCE,
-                width=64,
-                height=64,
-            )
-
-            logger.info(f"Successfully loaded: {model_id}")
-            return pipe
-
-        except Exception as e:
-            logger.warning(f"Failed to load {model_id}: {e}")
-            continue
-
-    logger.error("All image gen models failed to load")
-    return None
+            pipe.enable_xformers_memory_efficient_attention()
+        except Exception:
+            pass
+        # Warmup
+        _ = pipe(prompt="test", num_inference_steps=1, guidance_scale=0.0, width=64, height=64)
+        return pipe
+    except Exception as e:
+        logger.warning(f"Pipeline load failed: {e}")
+        return None
 
 
-async def generate_image(
-    prompt: str,
-    width: int = 0,
-    height: int = 0,
-) -> Optional[bytes]:
-    """
-    Generate an image from a text prompt and return raw RGB pixel data.
-
-    Args:
-        prompt: Text description of the image to generate.
-        width: Image width in pixels (default from config).
-        height: Image height in pixels (default from config).
-
-    Returns:
-        Raw RGB bytes (width * height * 3) or None on failure.
-    """
+async def generate_image(prompt: str, width: int = 0, height: int = 0) -> Optional[bytes]:
+    """Generate image or return None."""
     global _pipeline
-
     if _pipeline is None:
-        logger.error("Image gen pipeline not initialized — call initialize() first")
         return None
 
     width = width or config.IMAGE_GEN_WIDTH
     height = height or config.IMAGE_GEN_HEIGHT
 
-    logger.info(f"Generating image: '{prompt}' ({width}x{height})")
-
     try:
-        # Run generation in executor to not block async loop
-        rgb_bytes = await asyncio.get_event_loop().run_in_executor(
-            None,
-            _generate_sync,
-            prompt,
-            width,
-            height,
+        return await asyncio.get_event_loop().run_in_executor(
+            None, _generate_sync, prompt, width, height
         )
-
-        if rgb_bytes:
-            logger.info(f"Image generated: {len(rgb_bytes)} bytes ({width}x{height})")
-        return rgb_bytes
-
     except Exception as e:
         logger.error(f"Image generation failed: {e}")
         return None
 
 
 def _generate_sync(prompt: str, width: int, height: int) -> Optional[bytes]:
-    """
-    Synchronous image generation. Called from executor.
-    """
-    global _pipeline
-
     if _pipeline is None:
         return None
-
     try:
-        # SD-Turbo: 1 step, 0 guidance
         result = _pipeline(
             prompt=prompt,
             num_inference_steps=config.IMAGE_GEN_STEPS,
             guidance_scale=config.IMAGE_GEN_GUIDANCE,
-            width=width,
-            height=height,
+            width=width, height=height,
         )
-
         image = result.images[0]
-
-        # Ensure RGB mode
         if image.mode != "RGB":
             image = image.convert("RGB")
-
-        # Return raw RGB pixel bytes
         return image.tobytes()
-
-    except torch.cuda.OutOfMemoryError:
-        logger.error("CUDA out of memory during generation")
-        torch.cuda.empty_cache()
-        return None
     except Exception as e:
         logger.error(f"Generation error: {e}")
+        if _torch_available:
+            torch.cuda.empty_cache()
         return None
 
 
 async def is_ready() -> bool:
-    """Check if the image gen pipeline is loaded and ready."""
     return _pipeline is not None
 
 
 async def unload():
-    """Unload the model from VRAM."""
     global _pipeline
-
     async with _pipeline_lock:
         if _pipeline is not None:
             del _pipeline
             _pipeline = None
-            torch.cuda.empty_cache()
+            if _torch_available:
+                torch.cuda.empty_cache()
             logger.info("Image gen model unloaded")
