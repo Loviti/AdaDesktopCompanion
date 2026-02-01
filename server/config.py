@@ -127,6 +127,16 @@ MOOD_PRESETS = {
 DEFAULT_MOOD = "neutral"
 
 # =============================================================================
+# Image Generation (SD-Turbo)
+# =============================================================================
+
+IMAGE_GEN_MODEL = "stabilityai/sd-turbo"
+IMAGE_GEN_WIDTH = 128
+IMAGE_GEN_HEIGHT = 128
+IMAGE_GEN_STEPS = 1       # SD-Turbo does 1-step diffusion
+IMAGE_GEN_GUIDANCE = 0.0  # SD-Turbo uses 0 guidance scale
+
+# =============================================================================
 # Tools
 # =============================================================================
 

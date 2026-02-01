@@ -35,6 +35,23 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "generate_visual",
+            "description": "Generate an image to display on Ada's belly screen particle system. Use this when discussing visual topics (weather, code, emotions, objects) or when you want to express yourself visually. The image becomes a cloud of colored particles that float, swirl, and pulse.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Short image description, e.g. 'rainy clouds dark sky', 'glowing code matrix green', 'warm sunset orange', 'raccoon silhouette stars'",
+                    }
+                },
+                "required": ["prompt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_weather",
             "description": "Get current weather for a location. Default: Flint, MI.",
             "parameters": {
@@ -159,6 +176,7 @@ class ToolExecutor:
         logger.info(f"Executing tool: {tool_name}({arguments})")
 
         handlers = {
+            "generate_visual": self._generate_visual,
             "get_weather": self._get_weather,
             "web_search": self._web_search,
             "get_time": self._get_time,
@@ -180,6 +198,42 @@ class ToolExecutor:
     # =========================================================================
     # Tool Implementations
     # =========================================================================
+
+    async def _generate_visual(self, prompt: str) -> dict:
+        """Generate an image and display it as particles on Ada's belly screen."""
+        try:
+            import image_gen
+
+            if not await image_gen.is_ready():
+                return {"result": "Image generation model not loaded yet", "screen_action": None}
+
+            rgb_data = await image_gen.generate_image(
+                prompt,
+                width=config.IMAGE_GEN_WIDTH,
+                height=config.IMAGE_GEN_HEIGHT,
+            )
+
+            if rgb_data is None:
+                return {"result": "Image generation failed", "screen_action": None}
+
+            # Send to belly screen
+            if self.screen_engine:
+                await self.screen_engine.show_generated_image(
+                    rgb_data,
+                    config.IMAGE_GEN_WIDTH,
+                    config.IMAGE_GEN_HEIGHT,
+                )
+
+            return {
+                "result": f"Generated and displaying '{prompt}' as particles on belly screen",
+                "screen_action": "particles_shown",
+            }
+
+        except ImportError:
+            return {"result": "Image generation module not available", "screen_action": None}
+        except Exception as e:
+            logger.error(f"generate_visual failed: {e}")
+            return {"result": f"Image generation error: {str(e)}", "screen_action": None}
 
     async def _get_weather(self, location: str = "") -> dict:
         """Fetch current weather from OpenWeatherMap."""

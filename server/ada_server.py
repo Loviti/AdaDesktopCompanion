@@ -19,6 +19,7 @@ import sys
 import websockets
 
 import config
+import image_gen
 from ada_brain import AdaBrain
 from screen_engine import ScreenEngine
 from tool_executor import ToolExecutor
@@ -57,6 +58,9 @@ class AdaServer:
 
         # Wire up callbacks
         self._setup_callbacks()
+
+        # Image generation (loaded async during start())
+        self._image_gen_ready = False
 
         logger.info("🦝 Ada Desktop Companion server initialized")
 
@@ -263,6 +267,16 @@ class AdaServer:
         )
         logger.info(f"🎤 Audio WebSocket: ws://{config.AUDIO_WS_HOST}:{config.AUDIO_WS_PORT}")
 
+        # Initialize image generation (load model into VRAM)
+        logger.info("🎨 Loading image generation model into VRAM...")
+        try:
+            await image_gen.initialize()
+            self._image_gen_ready = True
+            logger.info("🎨 Image generation ready!")
+        except Exception as e:
+            logger.warning(f"🎨 Image generation failed to load: {e}")
+            logger.warning("   Ada will run without image generation.")
+
         # Start background tasks
         tasks = [
             asyncio.create_task(self.voice.connect_stt(), name="stt"),
@@ -273,6 +287,7 @@ class AdaServer:
         logger.info(f"🔊 STT: {config.STT_WS_URL}")
         logger.info(f"🗣️  TTS: {config.TTS_WS_URL}")
         logger.info(f"🧠 LLM: {config.OPENAI_MODEL} (OpenAI API)")
+        logger.info(f"🎨 Image Gen: {config.IMAGE_GEN_MODEL} ({'ready' if self._image_gen_ready else 'unavailable'})")
         logger.info("")
         logger.info("🦝 Ada is alive. Pet the belly.")
         logger.info("=" * 60)
@@ -299,6 +314,7 @@ class AdaServer:
 
         await self.voice.close()
         await self.tools.close()
+        await image_gen.unload()
 
         logger.info("🦝 Ada is sleeping. Goodnight.")
 
