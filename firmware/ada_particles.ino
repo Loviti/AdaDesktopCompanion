@@ -17,7 +17,12 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <Arduino_GFX_Library.h>
+// ESP32_IO_Expander is optional - uncomment if you have the library installed
+// If not installed, see instructions below for manual installation
+// #define USE_IO_EXPANDER
+#ifdef USE_IO_EXPANDER
 #include <ESP32_IO_Expander.h>
+#endif
 #include "config.h"
 #include "base64_decode.h"
 #include "particle_system.h"
@@ -36,10 +41,12 @@ Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     TFT_D3    // D3
 );
 
-Arduino_GFX *gfx = new Arduino_CO5300(bus, TFT_RST, 0, false, SCREEN_WIDTH, SCREEN_HEIGHT);
+Arduino_GFX *gfx = new Arduino_CO5300(bus, TFT_RST, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 6, 0, 0, 0);
 
-// I/O Expander for power management
+// I/O Expander for power management (optional)
+#ifdef USE_IO_EXPANDER
 ESP32_IO_Expander *expander = NULL;
+#endif
 
 // ============================================
 // WebSocket Client
@@ -94,18 +101,18 @@ void onWebSocketMessage(WebsocketsMessage message) {
 
 void onWebSocketEvent(WebsocketsEvent event, String data) {
     if (event == WebsocketsEvent::ConnectionOpened) {
-        USBSerial.println("WebSocket connected!");
+        Serial.println("WebSocket connected!");
         wsConnected = true;
     } else if (event == WebsocketsEvent::ConnectionClosed) {
-        USBSerial.println("WebSocket disconnected");
+        Serial.println("WebSocket disconnected");
         wsConnected = false;
     }
 }
 
 void connectWebSocket() {
     String url = "ws://" + String(SERVER_HOST) + ":" + String(SERVER_PORT) + SERVER_PATH;
-    USBSerial.print("Connecting to: ");
-    USBSerial.println(url);
+    Serial.print("Connecting to: ");
+    Serial.println(url);
 
     wsClient.onMessage(onWebSocketMessage);
     wsClient.onEvent(onWebSocketEvent);
@@ -121,15 +128,15 @@ void processMessage(const String& message) {
         DynamicJsonDocument(JSON_DOC_SIZE);
 
     if (!doc) {
-        USBSerial.println("ERROR: Failed to allocate JSON document");
+        Serial.println("ERROR: Failed to allocate JSON document");
         return;
     }
 
     DeserializationError error = deserializeJson(*doc, message);
 
     if (error) {
-        USBSerial.print("JSON parse error: ");
-        USBSerial.println(error.c_str());
+        Serial.print("JSON parse error: ");
+        Serial.println(error.c_str());
         doc->~DynamicJsonDocument();
         free(doc);
         return;
@@ -148,8 +155,8 @@ void processMessage(const String& message) {
     } else if (msgType == "pong") {
         // Heartbeat response, ignore
     } else {
-        USBSerial.print("Unknown message type: ");
-        USBSerial.println(msgType);
+        Serial.print("Unknown message type: ");
+        Serial.println(msgType);
     }
 
     doc->~DynamicJsonDocument();
@@ -163,24 +170,24 @@ void handleParticlesMessage(JsonObject& root) {
     int imgHeight = root["height"] | 128;
 
     if (!imageB64) {
-        USBSerial.println("No image data in particles message");
+        Serial.println("No image data in particles message");
         return;
     }
 
-    USBSerial.printf("Received particles: %dx%d image\n", imgWidth, imgHeight);
+    Serial.printf("Received particles: %dx%d image\n", imgWidth, imgHeight);
 
     // Decode base64 image
     size_t decodedLen = 0;
     bool decoded = base64_decode(imageB64, imageBuffer, &decodedLen);
 
     if (!decoded) {
-        USBSerial.println("Base64 decode failed");
+        Serial.println("Base64 decode failed");
         return;
     }
 
     size_t expectedLen = imgWidth * imgHeight * 3;
     if (decodedLen < expectedLen) {
-        USBSerial.printf("WARNING: Decoded %d bytes, expected %d\n",
+        Serial.printf("WARNING: Decoded %d bytes, expected %d\n",
                          (int)decodedLen, (int)expectedLen);
         // Pad with zeros if short
         if (decodedLen < expectedLen) {
@@ -202,55 +209,100 @@ void handleMoodMessage(JsonObject& root) {
     if (root.containsKey("config")) {
         JsonObject cfg = root["config"];
         particleSystem.parseConfig(cfg);
-        USBSerial.println("Mood update received");
+        Serial.println("Mood update received");
     }
 }
 
 void handleClearMessage() {
     particleSystem.clear();
-    USBSerial.println("Clear received");
+    Serial.println("Clear received");
 }
 
 // ============================================
 // Setup
 // ============================================
 void setup() {
-    USBSerial.begin(115200);
+    Serial.begin(115200);
+    // Wait for Serial to be ready (important for ESP32-S3 USB CDC)
+    while (!Serial && millis() < 5000) {
+        delay(10);
+    }
     delay(1000);
-    USBSerial.println("\n\n=== Ada Particles Starting ===");
+    Serial.println("\n\n=== Ada Particles Starting ===");
+    Serial.flush();
 
     // Initialize I2C
     Wire.begin(IIC_SDA, IIC_SCL);
 
-    // Initialize I/O expander for power
+    // Initialize I/O expander for power (optional)
+#ifdef USE_IO_EXPANDER
     expander = new ESP32_IO_Expander_TCA95xx_8bit(0x20);
     expander->init();
     expander->pinMode(0xFF, OUTPUT);
     expander->digitalWrite(0, HIGH);   // Enable power
     expander->digitalWrite(2, HIGH);   // Display power
+    Serial.println("I/O Expander initialized");
+#else
+    Serial.println("I/O Expander disabled (library not included)");
+    // Note: Display may still work without I/O expander, but power management is disabled
+#endif
 
     // Initialize display
+    Serial.println("Initializing display...");
     if (!gfx->begin()) {
-        USBSerial.println("Display init failed!");
-        while (1) delay(100);
+        Serial.println("ERROR: Display init failed!");
+        Serial.println("Check pin connections and power supply");
+        while (1) {
+            delay(100);
+            // Flash LED or something to indicate error
+        }
     }
 
+    Serial.println("Display begin() succeeded");
+    
+    // Fill screen with black first
     gfx->fillScreen(0x0000);
-    gfx->Display_Brightness(DISPLAY_BRIGHTNESS);
+    delay(100);
+    
+    // Set brightness
+    Serial.printf("Setting brightness to %d\n", DISPLAY_BRIGHTNESS);
+    ((Arduino_CO5300*)gfx)->setBrightness(DISPLAY_BRIGHTNESS);
+    delay(100);
+    
+    // Test: Fill with white to verify display works
+    Serial.println("Testing display with white fill...");
+    gfx->fillScreen(0xFFFF);
+    delay(1000);
+    
+    // Fill with red
+    gfx->fillScreen(0xF800);
+    delay(500);
+    
+    // Fill with green
+    gfx->fillScreen(0x07E0);
+    delay(500);
+    
+    // Fill with blue
+    gfx->fillScreen(0x001F);
+    delay(500);
+    
+    // Back to black
+    gfx->fillScreen(0x0000);
+    delay(200);
 
-    USBSerial.println("Display initialized (466x466 AMOLED)");
+    Serial.println("Display initialized (466x466 AMOLED)");
 
     // Allocate PSRAM buffers
     imageBuffer = (uint8_t*)ps_malloc(MAX_IMAGE_BYTES);
     if (!imageBuffer) {
-        USBSerial.println("ERROR: Failed to allocate image buffer in PSRAM");
+        Serial.println("ERROR: Failed to allocate image buffer in PSRAM");
     } else {
-        USBSerial.printf("Image buffer: %d bytes in PSRAM\n", MAX_IMAGE_BYTES);
+        Serial.printf("Image buffer: %d bytes in PSRAM\n", MAX_IMAGE_BYTES);
     }
 
     // Initialize particle system
     if (!particleSystem.init()) {
-        USBSerial.println("ERROR: Particle system init failed");
+        Serial.println("ERROR: Particle system init failed");
         while (1) delay(100);
     }
 
@@ -265,15 +317,15 @@ void setup() {
     particleSystem.startStartup();
 
     // Connect to WiFi
-    USBSerial.print("Connecting to WiFi: ");
-    USBSerial.println(WIFI_SSID);
+    Serial.print("Connecting to WiFi: ");
+    Serial.println(WIFI_SSID);
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     int wifiAttempts = 0;
     while (WiFi.status() != WL_CONNECTED && wifiAttempts < 30) {
         delay(500);
-        USBSerial.print(".");
+        Serial.print(".");
         wifiAttempts++;
 
         // Keep rendering during WiFi connect
@@ -283,21 +335,21 @@ void setup() {
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-        USBSerial.println("\nWiFi connected!");
-        USBSerial.print("IP: ");
-        USBSerial.println(WiFi.localIP());
+        Serial.println("\nWiFi connected!");
+        Serial.print("IP: ");
+        Serial.println(WiFi.localIP());
 
         connectWebSocket();
     } else {
-        USBSerial.println("\nWiFi failed — running offline");
+        Serial.println("\nWiFi failed — running offline");
     }
 
     lastFrameTime = millis();
     lastFpsReport = millis();
 
-    USBSerial.println("=== Ada Particles Ready ===");
-    USBSerial.printf("PSRAM free: %d bytes\n", ESP.getFreePsram());
-    USBSerial.printf("Heap free: %d bytes\n", ESP.getFreeHeap());
+    Serial.println("=== Ada Particles Ready ===");
+    Serial.printf("PSRAM free: %d bytes\n", ESP.getFreePsram());
+    Serial.printf("Heap free: %d bytes\n", ESP.getFreeHeap());
 }
 
 // ============================================
@@ -356,7 +408,7 @@ void loop() {
     // FPS reporting (every 10 seconds)
     if (currentTime - lastFpsReport >= 10000) {
         float fps = frameCount * 1000.0f / (currentTime - lastFpsReport + 1);
-        USBSerial.printf("FPS: %.1f | Particles: %d | PSRAM: %d | Heap: %d\n",
+        Serial.printf("FPS: %.1f | Particles: %d | PSRAM: %d | Heap: %d\n",
                          fps, particleSystem.getActiveCount(),
                          ESP.getFreePsram(), ESP.getFreeHeap());
         frameCount = 0;

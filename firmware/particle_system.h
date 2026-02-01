@@ -118,12 +118,12 @@ public:
     bool init() {
         particles = (Particle*)ps_malloc(sizeof(Particle) * MAX_PARTICLES);
         if (!particles) {
-            USBSerial.println("ERROR: Failed to allocate particle array in PSRAM");
+            Serial.println("ERROR: Failed to allocate particle array in PSRAM");
             return false;
         }
         memset(particles, 0, sizeof(Particle) * MAX_PARTICLES);
 
-        USBSerial.printf("Particle system: %d bytes allocated in PSRAM\n",
+        Serial.printf("Particle system: %d bytes allocated in PSRAM\n",
                          (int)(sizeof(Particle) * MAX_PARTICLES));
         return true;
     }
@@ -240,7 +240,7 @@ public:
         _hasImage = true;
         _clearing = false;
 
-        USBSerial.printf("Particles: %d active from %dx%d image (%d valid pixels)\n",
+        Serial.printf("Particles: %d active from %dx%d image (%d valid pixels)\n",
                          particleIdx, imgW, imgH, validCount);
     }
 

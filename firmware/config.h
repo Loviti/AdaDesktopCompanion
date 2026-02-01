@@ -4,13 +4,13 @@
 // ============================================
 // WiFi Configuration
 // ============================================
-#define WIFI_SSID "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID "TimandAud"
+#define WIFI_PASSWORD "Audrianne"
 
 // ============================================
 // Ada Server Configuration
 // ============================================
-#define SERVER_HOST "10.10.10.100"
+#define SERVER_HOST "10.10.10.111"
 #define SERVER_PORT 8765
 #define SERVER_PATH "/"
 
@@ -20,19 +20,19 @@
 #define SCREEN_WIDTH 466
 #define SCREEN_HEIGHT 466
 
-// QSPI Display Pins (CO5300 driver)
+// QSPI Display Pins (CO5300 driver) - Waveshare ESP32-S3-Touch-AMOLED-1.75
 #define TFT_CS    12
 #define TFT_DC    -1
-#define TFT_RST   17
-#define TFT_SCK   47
-#define TFT_D0    18
-#define TFT_D1    7
-#define TFT_D2    48
-#define TFT_D3    5
+#define TFT_RST   39
+#define TFT_SCK   38
+#define TFT_D0    4
+#define TFT_D1    5
+#define TFT_D2    6
+#define TFT_D3    7
 
 // I2C Pins
-#define IIC_SDA   6
-#define IIC_SCL   4
+#define IIC_SDA   15
+#define IIC_SCL   14
 
 // Touch Pins
 #define TP_INT    8
