@@ -49,7 +49,7 @@ class VoicePipeline:
         self._is_listening: bool = False
         self._stt_connected: bool = False
         self._tts_connected: bool = False
-        self._reconnect_delay: float = 2.0
+        self._reconnect_delay: float = 30.0
 
     # =========================================================================
     # Audio Client Management

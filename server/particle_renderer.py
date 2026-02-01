@@ -114,9 +114,9 @@ class ParticleRenderer:
         self.clearing: bool = False
 
         # Rendering options
-        self.jpeg_quality: int = 80
-        self.antialias: bool = True  # Slight blur for smoother particles
-        self.glow: bool = True       # Add subtle glow effect
+        self.jpeg_quality: int = 75
+        self.antialias: bool = False
+        self.glow: bool = False      # Disabled — causes JPEGDEC errors on ESP32
 
     def create_startup_particles(self):
         """Create initial particles for startup animation."""
@@ -426,9 +426,15 @@ class ParticleRenderer:
             except Exception:
                 pass
 
-        # Encode to JPEG
+        # Encode to JPEG — baseline mode, 4:2:0 subsampling for ESP32 compatibility
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=self.jpeg_quality)
+        img.save(
+            buf,
+            format="JPEG",
+            quality=self.jpeg_quality,
+            subsampling="4:2:0",
+            progressive=False,
+        )
         return buf.getvalue()
 
     def get_particle_count(self) -> int:
