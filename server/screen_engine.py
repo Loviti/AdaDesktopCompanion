@@ -101,19 +101,19 @@ class ScreenEngine:
         mode: behavioral animation type
         """
         # Arousal → energy
-        particle_speed = _lerp(0.3, 3.0, self.arousal)
-        dispersion = _lerp(10.0, 100.0, self.arousal)
+        particle_speed = _lerp(0.5, 3.0, self.arousal)
+        dispersion = _lerp(15.0, 100.0, self.arousal)
         pulse_speed = _lerp(0.5, 3.0, self.arousal)
 
         # Valence → warmth/size
-        # Map from [-1, 1] to [0, 1] for lerp
         valence_norm = (self.valence + 1.0) / 2.0
-        particle_size = _lerp(1.5, 5.0, valence_norm)
+        particle_size = _lerp(2.5, 6.0, valence_norm)
 
         # Certainty → density/connections
-        particle_count = int(_lerp(300, 1500, self.certainty))
-        link_count = int(_lerp(0, 80, self.certainty))
-        opacity = _lerp(0.5, 1.0, self.certainty)
+        # Keep count LOW for ESP32 perf (fewer particles = higher FPS = smoother)
+        particle_count = int(_lerp(200, 500, self.certainty))
+        link_count = int(_lerp(0, 40, self.certainty))
+        opacity = _lerp(0.8, 1.0, self.certainty)
 
         # Mode → animation type and overrides
         animation = "float"
@@ -122,20 +122,20 @@ class ScreenEngine:
         if self.mode == "THINKING":
             animation = "swirl_inward"
             rotation_speed = 2.0
-            dispersion = _lerp(10.0, 40.0, self.arousal)  # Tighter swirl
-            particle_speed = max(particle_speed, 1.0)
+            dispersion = _lerp(15.0, 50.0, self.arousal)
+            particle_speed = max(particle_speed, 1.5)
         elif self.mode == "TALKING":
             animation = "pulse_outward"
             particle_speed = max(particle_speed, 1.5)
             pulse_speed = max(pulse_speed, 1.5)
         elif self.mode == "LISTENING":
             animation = "float"
-            particle_speed = min(particle_speed, 0.8)
-            dispersion = min(dispersion, 30.0)
+            particle_speed = max(particle_speed, 0.8)
+            dispersion = max(dispersion, 20.0)
         elif self.mode == "IDLE":
-            animation = "drift"
-            particle_speed = min(particle_speed, 0.5)
-            pulse_speed = min(pulse_speed, 0.8)
+            animation = "float"
+            particle_speed = max(particle_speed, 0.8)
+            pulse_speed = max(pulse_speed, 0.6)
 
         return {
             "particle_count": particle_count,
@@ -236,7 +236,7 @@ class ScreenEngine:
         Backward-compatible with the old mood system.
         """
         mood_map = {
-            "neutral":  {"valence": 0.0,  "arousal": 0.3, "certainty": 0.5},
+            "neutral":  {"valence": 0.1,  "arousal": 0.4, "certainty": 0.8},
             "happy":    {"valence": 0.6,  "arousal": 0.5, "certainty": 0.7},
             "excited":  {"valence": 0.8,  "arousal": 0.9, "certainty": 0.8},
             "sarcastic": {"valence": -0.2, "arousal": 0.4, "certainty": 0.9},
@@ -285,7 +285,7 @@ class ScreenEngine:
     async def start_ambient(self):
         """Return to idle ambient state with gentle particles."""
         self.is_idle = True
-        self.set_emotional_state(mode="IDLE", arousal=0.2, valence=0.1, certainty=0.5)
+        self.set_emotional_state(mode="IDLE", arousal=0.4, valence=0.1, certainty=0.8)
         self._last_idle_change = time.time()
         await self.send_mood_update()
 

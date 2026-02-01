@@ -5,6 +5,9 @@
  * Receives image data and particle physics config from Ada's server via WebSocket.
  * Particles float, swirl, pulse, and drift based on Ada's emotional state.
  *
+ * Uses PSRAM-backed Canvas framebuffer for tear-free rendering and proper
+ * circle/shape rendering (QSPI displays need bulk transfers).
+ *
  * Hardware: Waveshare ESP32-S3-Touch-AMOLED-1.75
  * Display: 466x466 AMOLED with CO5300 driver (QSPI)
  *
@@ -18,7 +21,6 @@
 #include <Wire.h>
 #include <Arduino_GFX_Library.h>
 // ESP32_IO_Expander is optional - uncomment if you have the library installed
-// If not installed, see instructions below for manual installation
 // #define USE_IO_EXPANDER
 #ifdef USE_IO_EXPANDER
 #include <ESP32_IO_Expander.h>
@@ -43,6 +45,11 @@ Arduino_DataBus *bus = new Arduino_ESP32QSPI(
 
 Arduino_GFX *gfx = new Arduino_CO5300(bus, TFT_RST, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 6, 0, 0, 0);
 
+// ============================================
+// PSRAM-backed Canvas for tear-free rendering
+// ============================================
+Arduino_Canvas *canvas = nullptr;
+
 // I/O Expander for power management (optional)
 #ifdef USE_IO_EXPANDER
 ESP32_IO_Expander *expander = NULL;
@@ -63,8 +70,7 @@ ParticleSystem particleSystem;
 // ============================================
 // Image Buffer (PSRAM)
 // ============================================
-uint8_t *imageBuffer = NULL;   // Decoded RGB pixels
-char *jsonBuffer = NULL;       // Incoming JSON string
+uint8_t *imageBuffer = NULL;
 
 // ============================================
 // Timing
@@ -94,7 +100,6 @@ void handleClearMessage();
 // WebSocket Callbacks
 // ============================================
 void onWebSocketMessage(WebsocketsMessage message) {
-    // Store message for processing in main loop (avoid blocking WS callback)
     pendingMessage = message.data();
     messageReady = true;
 }
@@ -123,7 +128,6 @@ void connectWebSocket() {
 // Message Processing
 // ============================================
 void processMessage(const String& message) {
-    // Parse JSON — use PSRAM for the document
     DynamicJsonDocument* doc = new (ps_malloc(sizeof(DynamicJsonDocument)))
         DynamicJsonDocument(JSON_DOC_SIZE);
 
@@ -153,7 +157,7 @@ void processMessage(const String& message) {
     } else if (msgType == "clear") {
         handleClearMessage();
     } else if (msgType == "pong") {
-        // Heartbeat response, ignore
+        // Heartbeat response
     } else {
         Serial.print("Unknown message type: ");
         Serial.println(msgType);
@@ -164,10 +168,9 @@ void processMessage(const String& message) {
 }
 
 void handleParticlesMessage(JsonObject& root) {
-    // Extract image data
     const char* imageB64 = root["image"];
-    int imgWidth = root["width"] | 128;
-    int imgHeight = root["height"] | 128;
+    int imgWidth = root["width"] | 64;
+    int imgHeight = root["height"] | 64;
 
     if (!imageB64) {
         Serial.println("No image data in particles message");
@@ -176,7 +179,6 @@ void handleParticlesMessage(JsonObject& root) {
 
     Serial.printf("Received particles: %dx%d image\n", imgWidth, imgHeight);
 
-    // Decode base64 image
     size_t decodedLen = 0;
     bool decoded = base64_decode(imageB64, imageBuffer, &decodedLen);
 
@@ -189,19 +191,16 @@ void handleParticlesMessage(JsonObject& root) {
     if (decodedLen < expectedLen) {
         Serial.printf("WARNING: Decoded %d bytes, expected %d\n",
                          (int)decodedLen, (int)expectedLen);
-        // Pad with zeros if short
         if (decodedLen < expectedLen) {
             memset(imageBuffer + decodedLen, 0, expectedLen - decodedLen);
         }
     }
 
-    // Parse config
     if (root.containsKey("config")) {
         JsonObject cfg = root["config"];
         particleSystem.parseConfig(cfg);
     }
 
-    // Create particles from image
     particleSystem.createFromImage(imageBuffer, imgWidth, imgHeight);
 }
 
@@ -223,7 +222,6 @@ void handleClearMessage() {
 // ============================================
 void setup() {
     Serial.begin(115200);
-    // Wait for Serial to be ready (important for ESP32-S3 USB CDC)
     while (!Serial && millis() < 5000) {
         delay(10);
     }
@@ -234,65 +232,65 @@ void setup() {
     // Initialize I2C
     Wire.begin(IIC_SDA, IIC_SCL);
 
-    // Initialize I/O expander for power (optional)
 #ifdef USE_IO_EXPANDER
     expander = new ESP32_IO_Expander_TCA95xx_8bit(0x20);
     expander->init();
     expander->pinMode(0xFF, OUTPUT);
-    expander->digitalWrite(0, HIGH);   // Enable power
-    expander->digitalWrite(2, HIGH);   // Display power
+    expander->digitalWrite(0, HIGH);
+    expander->digitalWrite(2, HIGH);
     Serial.println("I/O Expander initialized");
 #else
-    Serial.println("I/O Expander disabled (library not included)");
-    // Note: Display may still work without I/O expander, but power management is disabled
+    Serial.println("I/O Expander disabled");
 #endif
 
     // Initialize display
     Serial.println("Initializing display...");
     if (!gfx->begin()) {
         Serial.println("ERROR: Display init failed!");
-        Serial.println("Check pin connections and power supply");
-        while (1) {
-            delay(100);
-            // Flash LED or something to indicate error
-        }
+        while (1) delay(100);
     }
 
     Serial.println("Display begin() succeeded");
-    
-    // Fill screen with black first
     gfx->fillScreen(0x0000);
     delay(100);
-    
+
     // Set brightness
     Serial.printf("Setting brightness to %d\n", DISPLAY_BRIGHTNESS);
     ((Arduino_CO5300*)gfx)->setBrightness(DISPLAY_BRIGHTNESS);
     delay(100);
-    
-    // Test: Fill with white to verify display works
-    Serial.println("Testing display with white fill...");
-    gfx->fillScreen(0xFFFF);
-    delay(1000);
-    
-    // Fill with red
-    gfx->fillScreen(0xF800);
-    delay(500);
-    
-    // Fill with green
-    gfx->fillScreen(0x07E0);
-    delay(500);
-    
-    // Fill with blue
-    gfx->fillScreen(0x001F);
-    delay(500);
-    
-    // Back to black
-    gfx->fillScreen(0x0000);
-    delay(200);
+
+    // Quick display test
+    Serial.println("Display test...");
+    gfx->fillScreen(0xFFFF); delay(500);
+    gfx->fillScreen(0xF800); delay(300);
+    gfx->fillScreen(0x07E0); delay(300);
+    gfx->fillScreen(0x001F); delay(300);
+    gfx->fillScreen(0x0000); delay(200);
+
+    // ============================================
+    // Initialize Canvas (PSRAM-backed framebuffer)
+    // This is the KEY to proper rendering:
+    // - fillCircle works correctly (pixel-level math in RAM)
+    // - No tearing (entire frame written to display at once)
+    // - Faster than individual QSPI draw calls
+    // Uses ~424KB of PSRAM (466 * 466 * 2 bytes)
+    // ============================================
+    Serial.println("Creating PSRAM canvas...");
+    canvas = new Arduino_Canvas(SCREEN_WIDTH, SCREEN_HEIGHT, gfx);
+    if (!canvas->begin()) {
+        Serial.println("WARNING: Canvas init failed! Falling back to direct rendering.");
+        // If canvas fails, we'll use gfx directly (with tearing)
+        delete canvas;
+        canvas = nullptr;
+    } else {
+        Serial.printf("Canvas ready: %dx%d (%d KB PSRAM)\n",
+                       SCREEN_WIDTH, SCREEN_HEIGHT,
+                       (SCREEN_WIDTH * SCREEN_HEIGHT * 2) / 1024);
+    }
 
     Serial.println("Display initialized (466x466 AMOLED)");
 
-    // Allocate PSRAM buffers
+    // Allocate PSRAM buffers for image data
     imageBuffer = (uint8_t*)ps_malloc(MAX_IMAGE_BYTES);
     if (!imageBuffer) {
         Serial.println("ERROR: Failed to allocate image buffer in PSRAM");
@@ -306,8 +304,8 @@ void setup() {
         while (1) delay(100);
     }
 
-    // Show startup text
-    gfx->setTextColor(0x07FF);  // Cyan
+    // Show startup text on the actual display (not canvas)
+    gfx->setTextColor(0x07FF);
     gfx->setTextSize(2);
     gfx->setCursor(SCREEN_WIDTH / 2 - 100, SCREEN_HEIGHT / 2 - 10);
     gfx->println("Ada Particles");
@@ -322,6 +320,9 @@ void setup() {
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+    // Get the render target (canvas if available, otherwise gfx)
+    Arduino_GFX *renderTarget = canvas ? (Arduino_GFX*)canvas : gfx;
+
     int wifiAttempts = 0;
     while (WiFi.status() != WL_CONNECTED && wifiAttempts < 30) {
         delay(500);
@@ -331,14 +332,14 @@ void setup() {
         // Keep rendering during WiFi connect
         float dt = 0.033f;
         particleSystem.update(dt);
-        particleSystem.render(gfx);
+        particleSystem.render(renderTarget);
+        if (canvas) canvas->flush();
     }
 
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("\nWiFi connected!");
         Serial.print("IP: ");
         Serial.println(WiFi.localIP());
-
         connectWebSocket();
     } else {
         Serial.println("\nWiFi failed — running offline");
@@ -350,6 +351,7 @@ void setup() {
     Serial.println("=== Ada Particles Ready ===");
     Serial.printf("PSRAM free: %d bytes\n", ESP.getFreePsram());
     Serial.printf("Heap free: %d bytes\n", ESP.getFreeHeap());
+    Serial.printf("Canvas: %s\n", canvas ? "ENABLED (tear-free)" : "DISABLED (direct)");
 }
 
 // ============================================
@@ -359,12 +361,10 @@ void loop() {
     unsigned long currentTime = millis();
     float dt = (currentTime - lastFrameTime) / 1000.0f;
 
-    // Cap dt to prevent physics explosions after lag spikes
     if (dt > 0.1f) dt = 0.1f;
 
     // Target frame rate
     if (dt < FRAME_TIME_MS / 1000.0f) {
-        // Still poll WebSocket during wait
         if (wsConnected) {
             wsClient.poll();
         }
@@ -382,12 +382,11 @@ void loop() {
         if (WiFi.status() == WL_CONNECTED) {
             connectWebSocket();
         } else {
-            // Try reconnecting WiFi
             WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
         }
     }
 
-    // Process pending message (if any)
+    // Process pending message
     if (messageReady) {
         messageReady = false;
         processMessage(pendingMessage);
@@ -397,19 +396,27 @@ void loop() {
     // Update particle physics
     particleSystem.update(dt);
 
-    // Render frame
-    particleSystem.render(gfx);
+    // ============================================
+    // Render to canvas (framebuffer), then flush
+    // This eliminates tearing and fixes circle rendering
+    // ============================================
+    Arduino_GFX *renderTarget = canvas ? (Arduino_GFX*)canvas : gfx;
+    particleSystem.render(renderTarget);
+    if (canvas) {
+        canvas->flush();  // Blast entire framebuffer to display
+    }
 
-    // Send periodic ping to keep connection alive
+    // Periodic ping
     if (wsConnected && frameCount % (TARGET_FPS * 10) == 0) {
         wsClient.send("{\"type\":\"ping\"}");
     }
 
-    // FPS reporting (every 10 seconds)
+    // FPS reporting
     if (currentTime - lastFpsReport >= 10000) {
         float fps = frameCount * 1000.0f / (currentTime - lastFpsReport + 1);
-        Serial.printf("FPS: %.1f | Particles: %d | PSRAM: %d | Heap: %d\n",
+        Serial.printf("FPS: %.1f | Particles: %d | Canvas: %s | PSRAM: %d | Heap: %d\n",
                          fps, particleSystem.getActiveCount(),
+                         canvas ? "ON" : "OFF",
                          ESP.getFreePsram(), ESP.getFreeHeap());
         frameCount = 0;
         lastFpsReport = currentTime;

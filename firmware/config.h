@@ -41,9 +41,9 @@
 // ============================================
 // Particle System
 // ============================================
-#define MAX_PARTICLES 1500
-#define DEFAULT_PARTICLE_COUNT 800
-#define DEFAULT_PARTICLE_SIZE 3.0f
+#define MAX_PARTICLES 800
+#define DEFAULT_PARTICLE_COUNT 350
+#define DEFAULT_PARTICLE_SIZE 4.0f
 #define DEFAULT_PARTICLE_SPEED 1.0f
 #define DEFAULT_DISPERSION 30.0f
 #define DEFAULT_OPACITY 1.0f
