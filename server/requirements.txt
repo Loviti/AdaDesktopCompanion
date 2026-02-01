@@ -1,0 +1,18 @@
+# Ada Desktop Companion - Server Dependencies
+
+# Core async
+websockets>=12.0
+asyncio-mqtt>=0.16.0  # future: IoT integrations
+
+# OpenAI for LLM
+openai>=1.40.0
+
+# Tools
+httpx>=0.27.0         # async HTTP client
+python-dotenv>=1.0.0  # env var management
+
+# Audio processing
+numpy>=1.26.0         # audio buffer manipulation
+
+# Utilities
+pydantic>=2.5.0       # data validation
