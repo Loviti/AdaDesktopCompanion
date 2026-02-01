@@ -1,12 +1,12 @@
 """
-Ada Desktop Companion - Unified Server
+Ada Desktop Companion - Unified Streaming Server
 
 Architecture:
-  - Port 8765: WebSocket for ESP32 (particle protocol)
+  - Port 8765: WebSocket for ESP32 (binary JPEG frames + JSON commands)
   - Port 8766: HTTP for web GUI + WebSocket at /ws for GUI live updates
 
-All messages to ESP32 include a "type" field.
-Rate-limited mood broadcasts (max 5/sec).
+The server renders particles and streams JPEG frames to the ESP32.
+The ESP32 is just a display — all computation happens here.
 """
 
 import asyncio
@@ -22,23 +22,30 @@ import websockets
 from aiohttp import web
 
 import config
-import image_gen
 from screen_engine import ScreenEngine
+from particle_renderer import ParticleRenderer
 from test_patterns import get_default_image, PATTERNS
 
-# Optional imports — server works without these
+# Optional imports
 try:
     from ada_brain import AdaBrain
     from tool_executor import ToolExecutor
     _brain_available = True
 except Exception as e:
     _brain_available = False
+    logging.getLogger("ada.server").warning(f"Brain unavailable: {e}")
 
 try:
     from voice_pipeline import VoicePipeline
     _voice_available = True
 except Exception:
     _voice_available = False
+
+try:
+    import image_gen
+    _image_gen_available = True
+except Exception:
+    _image_gen_available = False
 
 # =============================================================================
 # Logging
@@ -58,6 +65,7 @@ logger = logging.getLogger("ada.server")
 class AdaServer:
     def __init__(self):
         self.screen = ScreenEngine()
+        self.renderer = ParticleRenderer(466, 466)
 
         # Optional subsystems
         self.tools = None
@@ -79,214 +87,207 @@ class AdaServer:
             except Exception as e:
                 logger.warning(f"🎤 Voice unavailable: {e}")
 
-        # State
-        self._shutdown_event = asyncio.Event()
-        self._is_processing = False
         self._image_gen_ready = False
 
         # ESP32 connections
         self._esp32_clients: set = set()
+        self._esp32_stream_mode: dict = {}  # ws -> mode ("stream" or "legacy")
 
         # GUI WebSocket connections
         self._gui_clients: set = set()
 
-        # Rate limiting for ESP32 mood broadcasts
-        self._last_mood_send: float = 0.0
-        self._mood_interval: float = 1.0 / config.ESP32_MOOD_RATE_LIMIT
+        # Streaming state
+        self._streaming = False
+        self._target_fps = 15
+        self._frame_count = 0
+        self._last_fps_report = time.monotonic()
 
-        # Default test image (generated once)
-        self._default_image: bytes = get_default_image(
-            config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT
-        )
-
-        # Wire callbacks
-        self._setup_callbacks()
+        # Wire screen engine callbacks
+        self._setup_screen_callbacks()
 
         logger.info("🦝 Ada server initialized")
 
-    def _setup_callbacks(self):
-        """Override screen engine broadcast to go through our rate limiter."""
-        original_broadcast = self.screen._broadcast
+    def _setup_screen_callbacks(self):
+        """When screen engine updates mood, push config to renderer."""
+        original_send_mood = self.screen.send_mood_update
 
-        async def rate_limited_broadcast(message: dict):
-            """Broadcast to ESP32 with rate limiting for mood messages."""
-            now = time.monotonic()
-            if message.get("type") == "mood":
-                if now - self._last_mood_send < self._mood_interval:
-                    return  # Skip — too fast
-                self._last_mood_send = now
-
-            payload = json.dumps(message)
-
-            # Send to ESP32 clients
-            dead = set()
-            for ws in self._esp32_clients:
-                try:
-                    await ws.send(payload)
-                except Exception:
-                    dead.add(ws)
-            for ws in dead:
-                self._esp32_clients.discard(ws)
-
-            # Also notify GUI clients of state changes
-            await self._notify_gui(message)
-
-        self.screen._broadcast = rate_limited_broadcast
-
-        # Brain mood callback
-        if self.brain:
-            async def on_mood_change(mood: str):
-                self.screen.set_mood(mood)
-                await self.screen.show_reaction(mood)
-            self.brain.on_mood_change = on_mood_change
-
-    # =========================================================================
-    # GUI State Notification
-    # =========================================================================
-
-    async def _notify_gui(self, message: dict):
-        """Forward state updates to GUI WebSocket clients."""
-        if not self._gui_clients:
-            return
-
-        # Enrich with server state for GUI
-        gui_msg = {
-            "type": "state_update",
-            "esp32_connected": len(self._esp32_clients) > 0,
-            "esp32_count": len(self._esp32_clients),
-            "mode": self.screen.mode,
-            "valence": self.screen.valence,
-            "arousal": self.screen.arousal,
-            "certainty": self.screen.certainty,
-            "is_idle": self.screen.is_idle,
-            "brain_available": self.brain is not None,
-            "image_gen_ready": self._image_gen_ready,
-            "last_particle_msg": message,
-        }
-        payload = json.dumps(gui_msg)
-
-        dead = set()
-        for ws in self._gui_clients:
-            try:
-                await ws.send_str(payload)
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            self._gui_clients.discard(ws)
-
-    async def _send_full_state_to_gui(self, ws):
-        """Send complete current state to a newly connected GUI client."""
-        state = {
-            "type": "full_state",
-            "esp32_connected": len(self._esp32_clients) > 0,
-            "esp32_count": len(self._esp32_clients),
-            "mode": self.screen.mode,
-            "valence": self.screen.valence,
-            "arousal": self.screen.arousal,
-            "certainty": self.screen.certainty,
-            "is_idle": self.screen.is_idle,
-            "brain_available": self.brain is not None,
-            "image_gen_ready": self._image_gen_ready,
-            "config": self.screen._build_particle_config(),
-            "mood_presets": config.MOOD_PRESETS,
-            "patterns": list(PATTERNS.keys()),
-        }
-        await ws.send_str(json.dumps(state))
-
-    # =========================================================================
-    # ESP32 WebSocket Handler (port 8765)
-    # =========================================================================
-
-    async def handle_esp32(self, websocket):
-        """Handle an ESP32 WebSocket connection."""
-        addr = websocket.remote_address
-        logger.info(f"📺 ESP32 connected from {addr}")
-        self._esp32_clients.add(websocket)
-        self.screen._subscribers.add(websocket)
-
-        # Send default particle image immediately
-        try:
-            image_b64 = base64.b64encode(self._default_image).decode("ascii")
-            startup_msg = json.dumps({
-                "type": "particles",
-                "image": image_b64,
-                "width": config.IMAGE_GEN_WIDTH,
-                "height": config.IMAGE_GEN_HEIGHT,
-                "config": self.screen._build_particle_config(),
+        async def on_mood_update():
+            # Update renderer config from screen engine's particle config
+            config_dict = self.screen._build_particle_config()
+            self.renderer.update_config(config_dict)
+            # Also notify GUI clients
+            await self._broadcast_gui({
+                "type": "state",
+                "config": config_dict,
+                "mode": self.screen.mode,
             })
-            await websocket.send(startup_msg)
-            logger.info(f"📺 Sent default particle image to ESP32 ({len(self._default_image)} bytes RGB)")
-        except Exception as e:
-            logger.error(f"Failed to send startup image: {e}")
 
-        # Notify GUI clients
-        await self._notify_gui({"type": "esp32_connect"})
+        self.screen.send_mood_update = on_mood_update
+
+        # Override send_particles to feed image to renderer
+        original_send_particles = self.screen.send_particles
+
+        async def on_send_particles(image_data, width, height):
+            self.renderer.create_from_image(image_data, width, height)
+            config_dict = self.screen._build_particle_config()
+            self.renderer.update_config(config_dict)
+
+        self.screen.send_particles = on_send_particles
+
+    # =========================================================================
+    # ESP32 WebSocket Handler (Port 8765)
+    # =========================================================================
+
+    async def handle_esp32(self, websocket, path=None):
+        """Handle ESP32 WebSocket connection."""
+        self._esp32_clients.add(websocket)
+        self._esp32_stream_mode[websocket] = "stream"  # Default to stream mode
+        remote = websocket.remote_address
+        logger.info(f"[ESP32] Connected from {remote}. Total: {len(self._esp32_clients)}")
+
+        # Initialize renderer with default particles if none exist
+        if not self.renderer.particles:
+            default_img = get_default_image(config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT)
+            self.renderer.create_from_image(
+                default_img, config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT
+            )
+            initial_config = self.screen._build_particle_config()
+            self.renderer.update_config(initial_config)
+
+        # Start streaming if not already
+        if not self._streaming:
+            self._streaming = True
+            asyncio.create_task(self._stream_loop())
 
         try:
             async for message in websocket:
                 try:
-                    data = json.loads(message)
-                    msg_type = data.get("type", "")
-
-                    if msg_type == "ping":
-                        await websocket.send(json.dumps({"type": "pong"}))
-
-                    elif msg_type == "touch":
-                        action = await self.screen.handle_touch(data)
-                        if action:
-                            logger.info(f"Touch action: {action}")
-                            await self._notify_gui({"type": "touch", "action": action})
-
-                    else:
-                        logger.debug(f"ESP32 message: {msg_type}")
-
+                    if isinstance(message, str):
+                        data = json.loads(message)
+                        await self._handle_esp32_message(websocket, data)
                 except json.JSONDecodeError:
-                    logger.warning("ESP32: invalid JSON")
+                    pass
                 except Exception as e:
-                    logger.error(f"ESP32 handler error: {e}")
-
+                    logger.error(f"[ESP32] Message error: {e}")
         except websockets.ConnectionClosed:
             pass
         finally:
             self._esp32_clients.discard(websocket)
-            self.screen._subscribers.discard(websocket)
-            logger.info(f"📺 ESP32 disconnected from {addr}")
-            await self._notify_gui({"type": "esp32_disconnect"})
+            self._esp32_stream_mode.pop(websocket, None)
+            logger.info(f"[ESP32] Disconnected. Total: {len(self._esp32_clients)}")
+
+            # Stop streaming if no clients
+            if not self._esp32_clients:
+                self._streaming = False
+
+    async def _handle_esp32_message(self, ws, data: dict):
+        """Handle messages from ESP32."""
+        msg_type = data.get("type", "")
+
+        if msg_type == "hello":
+            mode = data.get("mode", "stream")
+            self._esp32_stream_mode[ws] = mode
+            logger.info(f"[ESP32] Hello: mode={mode}, "
+                       f"width={data.get('width')}, height={data.get('height')}")
+
+        elif msg_type == "ping":
+            try:
+                await ws.send(json.dumps({"type": "pong"}))
+            except Exception:
+                pass
+
+        elif msg_type == "touch":
+            logger.info(f"[ESP32] Touch: ({data.get('x')}, {data.get('y')})")
+            # Forward to GUI
+            await self._broadcast_gui({"type": "touch", "x": data.get("x"), "y": data.get("y")})
 
     # =========================================================================
-    # GUI HTTP Server (port 8766)
+    # Frame Streaming Loop
     # =========================================================================
 
-    def _create_http_app(self) -> web.Application:
-        app = web.Application()
-        app.router.add_get("/", self._handle_gui_index)
-        app.router.add_get("/ws", self._handle_gui_ws)
-        app.router.add_get("/api/state", self._handle_api_state)
-        app.router.add_post("/api/mood", self._handle_api_mood)
-        app.router.add_post("/api/particles", self._handle_api_particles)
-        app.router.add_post("/api/clear", self._handle_api_clear)
-        app.router.add_post("/api/mode", self._handle_api_mode)
-        app.router.add_post("/api/text", self._handle_api_text)
-        app.router.add_post("/api/pattern", self._handle_api_pattern)
-        # Serve any static files from gui/
-        app.router.add_static("/gui/", config.GUI_DIR, show_index=True)
-        return app
+    async def _stream_loop(self):
+        """Main render loop — updates physics and streams frames to ESP32."""
+        logger.info(f"Streaming started at {self._target_fps} FPS target")
+        last_time = time.monotonic()
+        frame_interval = 1.0 / self._target_fps
 
-    async def _handle_gui_index(self, request: web.Request) -> web.Response:
-        index_path = config.GUI_DIR / "index.html"
-        if index_path.exists():
-            return web.FileResponse(index_path)
-        return web.Response(text="GUI not found", status=404)
+        while self._streaming and self._esp32_clients:
+            now = time.monotonic()
+            dt = now - last_time
+            last_time = now
 
-    async def _handle_gui_ws(self, request: web.Request) -> web.WebSocketResponse:
+            # Update particle physics
+            self.renderer.update(min(dt, 0.1))
+
+            # Render frame to JPEG
+            try:
+                jpeg_data = self.renderer.render_frame()
+            except Exception as e:
+                logger.error(f"Render error: {e}")
+                await asyncio.sleep(frame_interval)
+                continue
+
+            # Send to all ESP32 clients as binary
+            dead = set()
+            for ws in self._esp32_clients:
+                try:
+                    await ws.send(jpeg_data)
+                except Exception:
+                    dead.add(ws)
+            for ws in dead:
+                self._esp32_clients.discard(ws)
+                self._esp32_stream_mode.pop(ws, None)
+
+            self._frame_count += 1
+
+            # FPS reporting
+            if now - self._last_fps_report >= 10.0:
+                fps = self._frame_count / (now - self._last_fps_report)
+                size_kb = len(jpeg_data) / 1024 if jpeg_data else 0
+                logger.info(f"Stream: {fps:.1f} FPS, {size_kb:.0f} KB/frame, "
+                           f"{self.renderer.get_particle_count()} particles, "
+                           f"{len(self._esp32_clients)} clients")
+                self._frame_count = 0
+                self._last_fps_report = now
+
+            # Sleep to maintain target FPS
+            elapsed = time.monotonic() - now
+            sleep_time = frame_interval - elapsed
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+            else:
+                await asyncio.sleep(0)  # Yield to event loop
+
+        logger.info("Streaming stopped")
+        self._streaming = False
+
+    # =========================================================================
+    # GUI WebSocket Handler (Port 8766 /ws)
+    # =========================================================================
+
+    async def handle_gui_ws(self, request):
+        """Handle GUI WebSocket upgrade."""
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-
         self._gui_clients.add(ws)
-        logger.info(f"🖥️  GUI client connected. Total: {len(self._gui_clients)}")
+        logger.info(f"[GUI] Connected. Total: {len(self._gui_clients)}")
 
-        # Send full state on connect
-        await self._send_full_state_to_gui(ws)
+        # Send initial state
+        try:
+            await ws.send_json({
+                "type": "full_state",
+                "config": self.renderer.config.to_dict(),
+                "target_config": self.renderer.target_config.to_dict(),
+                "mode": self.screen.mode,
+                "esp32_connected": len(self._esp32_clients) > 0,
+                "esp32_count": len(self._esp32_clients),
+                "streaming": self._streaming,
+                "target_fps": self._target_fps,
+                "patterns": list(PATTERNS.keys()),
+                "brain_available": self.brain is not None,
+            })
+        except Exception:
+            pass
 
         try:
             async for msg in ws:
@@ -296,262 +297,253 @@ class AdaServer:
                         await self._handle_gui_message(data)
                     except json.JSONDecodeError:
                         pass
-                elif msg.type == web.WSMsgType.ERROR:
-                    logger.error(f"GUI WS error: {ws.exception()}")
+                    except Exception as e:
+                        logger.error(f"[GUI] Error: {e}")
         finally:
             self._gui_clients.discard(ws)
-            logger.info(f"🖥️  GUI client disconnected. Total: {len(self._gui_clients)}")
+            logger.info(f"[GUI] Disconnected. Total: {len(self._gui_clients)}")
 
         return ws
 
     async def _handle_gui_message(self, data: dict):
-        """Process messages from GUI WebSocket."""
-        msg_type = data.get("type", "")
+        """Handle commands from the web GUI."""
+        cmd = data.get("cmd") or data.get("type")
 
-        if msg_type == "mood_update":
-            # Direct config update from sliders
-            conf = data.get("config", {})
-            await self._send_mood_to_esp32(conf)
-
-        elif msg_type == "set_mood":
-            mood_name = data.get("mood", "neutral")
-            self.screen.set_mood(mood_name)
-            await self.screen.send_mood_update()
-
-        elif msg_type == "set_mode":
+        if cmd == "set_mode":
             mode = data.get("mode", "IDLE")
             self.screen.set_emotional_state(mode=mode)
             await self.screen.send_mood_update()
 
-        elif msg_type == "particles":
-            # Image upload from GUI
-            image_b64 = data.get("image", "")
-            width = data.get("width", 128)
-            height = data.get("height", 128)
-            conf = data.get("config", self.screen._build_particle_config())
-            if image_b64:
-                msg = json.dumps({
-                    "type": "particles",
-                    "image": image_b64,
-                    "width": width,
-                    "height": height,
-                    "config": conf,
-                })
-                for ws in self._esp32_clients:
-                    try:
-                        await ws.send(msg)
-                    except Exception:
-                        pass
+        elif cmd == "set_emotion":
+            self.screen.set_emotion(
+                data.get("valence", 0),
+                data.get("arousal", 0.3),
+                data.get("certainty", 0.8),
+            )
+            await self.screen.send_mood_update()
 
-        elif msg_type == "clear":
-            await self.screen.send_clear()
+        elif cmd == "set_mood":
+            self.screen.set_mood(data.get("mood", "neutral"))
+            await self.screen.send_mood_update()
 
-        elif msg_type == "pattern":
-            pattern_name = data.get("name", "raccoon")
+        elif cmd == "set_config":
+            # Direct config override from GUI sliders
+            config_update = data.get("config", {})
+            self.renderer.update_config(config_update)
+            self.screen._build_particle_config()  # Keep screen engine in sync
+            await self._broadcast_gui({"type": "state", "config": self.renderer.target_config.to_dict()})
+
+        elif cmd == "set_gaze":
+            pass  # Not used in streaming mode
+
+        elif cmd == "blink":
+            pass  # Not used in streaming mode
+
+        elif cmd == "load_pattern":
+            pattern_name = data.get("pattern", "raccoon")
             if pattern_name in PATTERNS:
                 img_data = PATTERNS[pattern_name](config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT)
-                await self.screen.send_particles(img_data, config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT)
+                self.renderer.create_from_image(img_data, config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT)
+                logger.info(f"Loaded pattern: {pattern_name}")
 
-        elif msg_type == "text_input":
+        elif cmd == "upload_image":
+            # Base64 RGB image from GUI
+            image_b64 = data.get("image", "")
+            width = data.get("width", 64)
+            height = data.get("height", 64)
+            if image_b64:
+                try:
+                    rgb_data = base64.b64decode(image_b64)
+                    self.renderer.create_from_image(rgb_data, width, height)
+                    logger.info(f"Uploaded image: {width}x{height}")
+                except Exception as e:
+                    logger.error(f"Image upload error: {e}")
+
+        elif cmd == "clear":
+            self.renderer.clear()
+
+        elif cmd == "set_fps":
+            self._target_fps = max(1, min(30, data.get("fps", 15)))
+            logger.info(f"Target FPS: {self._target_fps}")
+
+        elif cmd == "set_quality":
+            self.renderer.jpeg_quality = max(30, min(95, data.get("quality", 80)))
+            logger.info(f"JPEG quality: {self.renderer.jpeg_quality}")
+
+        elif cmd == "chat":
             text = data.get("text", "").strip()
             if text and self.brain:
-                asyncio.create_task(self._process_text_input(text))
+                asyncio.create_task(self._process_chat(text))
 
-    async def _send_mood_to_esp32(self, conf: dict):
-        """Send a mood config directly to ESP32 (bypasses screen engine state)."""
-        msg = json.dumps({"type": "mood", "config": conf})
-        now = time.monotonic()
-        if now - self._last_mood_send < self._mood_interval:
-            return
-        self._last_mood_send = now
-
-        dead = set()
-        for ws in self._esp32_clients:
-            try:
-                await ws.send(msg)
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            self._esp32_clients.discard(ws)
-
-        # Notify GUI
-        await self._notify_gui({"type": "mood", "config": conf})
-
-    async def _process_text_input(self, text: str):
-        """Process text input from GUI through the brain."""
+    async def _process_chat(self, text: str):
+        """Process chat from GUI through brain."""
         if not self.brain:
             return
 
-        self._is_processing = True
-        await self.screen.show_thinking(text="thinking...")
+        self.screen.set_emotional_state(mode="THINKING")
+        await self.screen.send_mood_update()
 
         try:
-            response_text = ""
+            response = ""
             async for chunk in self.brain.think(text):
-                response_text += chunk
+                response += chunk
 
-            # Send response to GUI
-            for ws in self._gui_clients:
-                try:
-                    await ws.send_str(json.dumps({
-                        "type": "brain_response",
-                        "input": text,
-                        "response": response_text,
-                    }))
-                except Exception:
-                    pass
+            self.screen.set_emotional_state(mode="TALKING")
+            await self.screen.send_mood_update()
+
+            await self._broadcast_gui({
+                "type": "chat_response",
+                "text": response,
+            })
+
+            await asyncio.sleep(2)
+            self.screen.set_emotional_state(mode="IDLE")
+            await self.screen.send_mood_update()
 
         except Exception as e:
-            logger.error(f"Brain processing error: {e}")
-        finally:
-            self._is_processing = False
-            await self.screen.start_ambient()
+            logger.error(f"Chat error: {e}")
+            await self._broadcast_gui({"type": "chat_response", "text": f"Error: {e}"})
 
-    # REST API endpoints
-    async def _handle_api_state(self, request: web.Request) -> web.Response:
-        state = {
-            "esp32_connected": len(self._esp32_clients) > 0,
-            "esp32_count": len(self._esp32_clients),
-            "mode": self.screen.mode,
-            "config": self.screen._build_particle_config(),
-            "brain_available": self.brain is not None,
-            "image_gen_ready": self._image_gen_ready,
-        }
-        return web.json_response(state)
+    async def _broadcast_gui(self, message: dict):
+        """Send message to all GUI WebSocket clients."""
+        dead = set()
+        for ws in self._gui_clients:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                dead.add(ws)
+        self._gui_clients -= dead
 
-    async def _handle_api_mood(self, request: web.Request) -> web.Response:
-        data = await request.json()
-        conf = data.get("config", {})
-        await self._send_mood_to_esp32(conf)
-        return web.json_response({"ok": True})
+    # =========================================================================
+    # HTTP Routes
+    # =========================================================================
 
-    async def _handle_api_particles(self, request: web.Request) -> web.Response:
-        data = await request.json()
-        image_b64 = data.get("image", "")
-        width = data.get("width", 128)
-        height = data.get("height", 128)
-        if image_b64:
-            rgb_data = base64.b64decode(image_b64)
-            await self.screen.send_particles(rgb_data, width, height)
-        return web.json_response({"ok": True})
+    def setup_http(self) -> web.Application:
+        app = web.Application()
+        gui_dir = Path(__file__).parent / "gui"
 
-    async def _handle_api_clear(self, request: web.Request) -> web.Response:
-        await self.screen.send_clear()
-        return web.json_response({"ok": True})
+        async def index(request):
+            return web.FileResponse(gui_dir / "index.html")
 
-    async def _handle_api_mode(self, request: web.Request) -> web.Response:
-        data = await request.json()
-        mode = data.get("mode", "IDLE")
-        self.screen.set_emotional_state(mode=mode)
-        await self.screen.send_mood_update()
-        return web.json_response({"ok": True})
+        async def api_state(request):
+            return web.json_response({
+                "esp32_connected": len(self._esp32_clients) > 0,
+                "esp32_count": len(self._esp32_clients),
+                "mode": self.screen.mode,
+                "config": self.renderer.config.to_dict(),
+                "target_config": self.renderer.target_config.to_dict(),
+                "streaming": self._streaming,
+                "target_fps": self._target_fps,
+                "jpeg_quality": self.renderer.jpeg_quality,
+                "particle_count": self.renderer.get_particle_count(),
+                "brain_available": self.brain is not None,
+                "patterns": list(PATTERNS.keys()),
+            })
 
-    async def _handle_api_text(self, request: web.Request) -> web.Response:
-        data = await request.json()
-        text = data.get("text", "").strip()
-        if text and self.brain:
-            asyncio.create_task(self._process_text_input(text))
-            return web.json_response({"ok": True, "status": "processing"})
-        return web.json_response({"ok": False, "error": "No brain or empty text"})
-
-    async def _handle_api_pattern(self, request: web.Request) -> web.Response:
-        data = await request.json()
-        name = data.get("name", "raccoon")
-        if name in PATTERNS:
-            img = PATTERNS[name](config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT)
-            await self.screen.send_particles(img, config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT)
+        async def api_command(request):
+            data = await request.json()
+            await self._handle_gui_message(data)
             return web.json_response({"ok": True})
-        return web.json_response({"ok": False, "error": f"Unknown pattern: {name}"})
+
+        async def api_frame(request):
+            """Get current frame as JPEG (for debugging / preview)."""
+            jpeg = self.renderer.render_frame()
+            return web.Response(body=jpeg, content_type="image/jpeg")
+
+        async def static_file(request):
+            filename = request.match_info["filename"]
+            filepath = gui_dir / filename
+            if filepath.exists() and filepath.is_relative_to(gui_dir):
+                return web.FileResponse(filepath)
+            return web.Response(status=404)
+
+        app.router.add_get("/", index)
+        app.router.add_get("/ws", self.handle_gui_ws)
+        app.router.add_get("/api/state", api_state)
+        app.router.add_post("/api/command", api_command)
+        app.router.add_get("/api/frame", api_frame)
+        app.router.add_get("/{filename}", static_file)
+
+        return app
 
     # =========================================================================
     # Server Lifecycle
     # =========================================================================
 
     async def start(self):
+        self._shutdown_event = asyncio.Event()
+
         logger.info("=" * 60)
         logger.info("🦝 Ada Desktop Companion — Starting Up")
         logger.info("=" * 60)
 
         # Start ESP32 WebSocket server
-        esp32_server = await websockets.serve(
+        ws_server = await websockets.serve(
             self.handle_esp32,
             config.SCREEN_WS_HOST,
             config.SCREEN_WS_PORT,
             max_size=None,
+            ping_interval=20,
+            ping_timeout=60,
         )
         logger.info(f"📺 ESP32 WebSocket: ws://0.0.0.0:{config.SCREEN_WS_PORT}")
 
         # Start HTTP + GUI WebSocket server
-        http_app = self._create_http_app()
-        runner = web.AppRunner(http_app)
+        app = self.setup_http()
+        runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, config.GUI_HTTP_HOST, config.GUI_HTTP_PORT)
+        site = web.TCPSite(runner, "0.0.0.0", config.GUI_HTTP_PORT)
         await site.start()
         logger.info(f"🖥️  Web GUI: http://0.0.0.0:{config.GUI_HTTP_PORT}")
         logger.info(f"🖥️  GUI WebSocket: ws://0.0.0.0:{config.GUI_HTTP_PORT}/ws")
 
-        # Try loading image generation (non-blocking)
-        try:
-            await image_gen.initialize()
-            self._image_gen_ready = await image_gen.is_ready()
-        except Exception as e:
-            logger.warning(f"🎨 Image gen unavailable: {e}")
+        # Init image gen (optional)
+        if _image_gen_available:
+            try:
+                await image_gen.initialize()
+                self._image_gen_ready = True
+                logger.info("🎨 Image generation ready")
+            except Exception as e:
+                logger.info(f"🎨 Image gen unavailable: {e}")
 
-        # Background tasks
-        tasks = []
+        # Create initial particles
+        default_img = get_default_image(config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT)
+        self.renderer.create_from_image(default_img, config.IMAGE_GEN_WIDTH, config.IMAGE_GEN_HEIGHT)
+        initial_config = self.screen._build_particle_config()
+        self.renderer.update_config(initial_config)
 
-        # Idle loop
-        tasks.append(asyncio.create_task(self.screen.idle_loop(), name="idle"))
-
-        # Voice pipeline (optional)
-        if self.voice:
-            tasks.append(asyncio.create_task(self.voice.connect_stt(), name="stt"))
-            tasks.append(asyncio.create_task(self.voice.connect_tts(), name="tts"))
-
-        logger.info("")
-        logger.info(f"🧠 Brain: {'ready' if self.brain else 'unavailable (no OpenAI key?)'}")
-        logger.info(f"🎨 Image Gen: {'ready' if self._image_gen_ready else 'unavailable (no torch)'}")
-        logger.info(f"🎤 Voice: {'ready' if self.voice else 'unavailable'}")
-        logger.info(f"📺 Default image: raccoon silhouette ({len(self._default_image)} bytes)")
+        logger.info(f"📺 Default image: {config.IMAGE_GEN_WIDTH}x{config.IMAGE_GEN_HEIGHT}")
+        logger.info(f"🎬 Stream target: {self._target_fps} FPS, JPEG Q{self.renderer.jpeg_quality}")
+        logger.info(f"🧠 Brain: {'ready' if self.brain else 'unavailable'}")
         logger.info("")
         logger.info("🦝 Ada is alive. Pet the belly.")
         logger.info("=" * 60)
 
-        # Wait for shutdown
+        # Background tasks
+        tasks = []
+        if self.voice:
+            tasks.append(asyncio.create_task(self.voice.connect_stt(), name="stt"))
+            tasks.append(asyncio.create_task(self.voice.connect_tts(), name="tts"))
+
         try:
             await self._shutdown_event.wait()
         except asyncio.CancelledError:
             pass
 
-        # Cleanup
         logger.info("Shutting down...")
+        self._streaming = False
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-        esp32_server.close()
-        await esp32_server.wait_closed()
+        ws_server.close()
+        await ws_server.wait_closed()
         await runner.cleanup()
-
-        if self.tools:
-            await self.tools.close()
-        if self.voice:
-            await self.voice.close()
-        await image_gen.unload()
-
-        logger.info("🦝 Ada is sleeping. Goodnight.")
 
     def shutdown(self):
         self._shutdown_event.set()
 
 
-# =============================================================================
-# Entry Point
-# =============================================================================
-
 def main():
     server = AdaServer()
-
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -561,7 +553,7 @@ def main():
     try:
         loop.run_until_complete(server.start())
     except KeyboardInterrupt:
-        logger.info("Interrupted")
+        pass
     finally:
         loop.close()
 

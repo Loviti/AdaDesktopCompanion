@@ -20,7 +20,7 @@
 #define SCREEN_WIDTH 466
 #define SCREEN_HEIGHT 466
 
-// QSPI Display Pins (CO5300 driver) - Waveshare ESP32-S3-Touch-AMOLED-1.75
+// QSPI Display Pins (CO5300 driver)
 #define TFT_CS    12
 #define TFT_DC    -1
 #define TFT_RST   39
@@ -39,46 +39,21 @@
 #define TP_RST    -1
 
 // ============================================
-// Particle System
+// Display Brightness (0-255)
 // ============================================
-#define MAX_PARTICLES 800
-#define DEFAULT_PARTICLE_COUNT 350
-#define DEFAULT_PARTICLE_SIZE 4.0f
-#define DEFAULT_PARTICLE_SPEED 1.0f
-#define DEFAULT_DISPERSION 30.0f
-#define DEFAULT_OPACITY 1.0f
-#define DEFAULT_PULSE_SPEED 1.0f
-#define DEFAULT_ROTATION_SPEED 0.0f
+#define DISPLAY_BRIGHTNESS 200
 
 // ============================================
-// Animation
+// JPEG Frame Buffer
+// Max JPEG frame size we can receive.
+// 466x466 JPEG at quality 80 is typically 30-80KB.
+// Allocate 150KB to be safe.
 // ============================================
-#define TARGET_FPS 30
-#define FRAME_TIME_MS (1000 / TARGET_FPS)
-#define CONFIG_LERP_SPEED 3.0f       // How fast config transitions happen (per second)
-#define POSITION_LERP_SPEED 2.0f     // How fast particles morph to new positions
-#define FADE_OUT_SPEED 2.0f          // Opacity decrease per second during clear
-
-// ============================================
-// Image Buffer
-// ============================================
-#define MAX_IMAGE_WIDTH 256
-#define MAX_IMAGE_HEIGHT 256
-#define MAX_IMAGE_BYTES (MAX_IMAGE_WIDTH * MAX_IMAGE_HEIGHT * 3)
-// Base64 of max image: ceil(MAX_IMAGE_BYTES * 4/3)
-#define MAX_BASE64_SIZE ((MAX_IMAGE_BYTES + 2) / 3 * 4 + 1)
+#define JPEG_BUFFER_SIZE (150 * 1024)
 
 // ============================================
 // WebSocket
 // ============================================
 #define WS_RECONNECT_INTERVAL_MS 5000
-// JSON doc size: enough for base64 image + config
-// 128x128x3 = 49152 bytes, base64 = ~65536 chars, plus JSON overhead
-#define JSON_DOC_SIZE (128 * 1024)
-
-// ============================================
-// Display Brightness
-// ============================================
-#define DISPLAY_BRIGHTNESS 200  // 0-255
 
 #endif // CONFIG_H
