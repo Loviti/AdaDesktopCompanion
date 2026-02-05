@@ -1,100 +1,154 @@
-# 🦝 Ada Desktop Companion
+# Ada Desktop Companion
 
-A raccoon stuffed animal with a soul. Ada is a chaotic gremlin AI living inside a plush raccoon with a **Waveshare ESP32-S3-Touch-AMOLED-1.75** (466×466) display in her belly.
+A dreamy particle display system for Ada's physical embodiment. Particles drift like they're suspended in water, coalesce into formations when Ada wants to express something, and respond to mood through dynamic colors.
 
-Think Baymax's belly screen, but for a feral raccoon who happens to be an AI.
+## Hardware
+
+- **Waveshare ESP32-S3-Touch-AMOLED-1.75**
+  - 466×466 AMOLED display
+  - CO5300 driver via QSPI
+  - ESP32-S3 with 8MB PSRAM
+  - Capacitive touch
+  - Dual microphones + speaker
+
+## Features
+
+### Particle System
+- 200-400 soft-glow particles with Gaussian falloff
+- Simplex noise-driven organic motion (like floating in water)
+- Trail effect via framebuffer fade (dreamy persistence)
+- Additive blending for natural glow when particles overlap
+- Fixed-point math for smooth 30+ FPS performance
+
+### Formations
+Particles can form recognizable shapes:
+- ☁️ **Cloud** - Fluffy cumulus shape
+- ☀️ **Sun** - Center cluster with radiating rays
+- 🌧️ **Rain** - Vertical columns drifting down
+- ❄️ **Snow** - Scattered gentle drift
+- ❤️ **Heart** - Classic heart curve
+- 💭 **Thinking** - Swirling vortex
+- 〰️ **Wave** - Sine wave pattern
+
+### Mood-Driven Colors
+Colors respond to emotional state:
+- **Valence** (−1 to +1): Blue (concerned) → Cyan (neutral) → Gold (happy)
+- **Arousal** (0 to 1): Dim/calm → Bright/energetic
+
+### Disconnected State
+When WiFi connection is lost:
+- Particles form a sad droopy shape
+- Colors dim to blue-gray
+- Automatically recovers when connection restored
+
+## Quick Start
+
+### 1. Install Arduino IDE & Libraries
+
+Required libraries (install via Library Manager):
+- `Arduino_GFX_Library` (or use Waveshare's modified version)
+- `ArduinoWebsockets`
+- `ArduinoJson`
+
+### 2. Configure WiFi
+
+Edit `firmware/config.h`:
+```cpp
+#define WIFI_SSID "your_wifi_ssid"
+#define WIFI_PASSWORD "your_wifi_password"
+#define SERVER_HOST "your_server_ip"
+#define SERVER_PORT 8765
+```
+
+### 3. Upload
+
+1. Open `firmware/ada_particles.ino` in Arduino IDE
+2. Select board: **ESP32S3 Dev Module**
+3. Enable: **USB CDC On Boot**
+4. Set Flash Size: **16MB**
+5. Set PSRAM: **OPI PSRAM**
+6. Upload
+
+### 4. Display Orientation
+
+The display is configured with USB-C port on the **bottom**.
+If your orientation is different, adjust `DISPLAY_ROTATION` in `config.h`:
+- `0` = Default (USB-C left)
+- `1` = 90° clockwise
+- `2` = 180°
+- `3` = 270° clockwise (USB-C bottom) ← Current setting
+
+## WebSocket Protocol
+
+The display receives state updates via WebSocket:
+
+```json
+{
+  "type": "state",
+  "mood": {
+    "valence": 0.3,
+    "arousal": 0.5
+  },
+  "formation": "cloud",
+  "transition_ms": 2000,
+  "particle_count": 300
+}
+```
+
+### Formation Names
+`idle`, `cloud`, `sun`, `rain`, `snow`, `heart`, `thinking`, `wave`
+
+### Brightness Control
+```json
+{
+  "type": "config",
+  "brightness": 200
+}
+```
 
 ## Architecture
 
 ```
-┌─────────────────────┐    WebSocket     ┌────────────────────┐
-│    AIServer         │◄───(8765)───────►│   ESP32-S3 AMOLED  │
-│                     │   Screen JSON    │   466×466 belly    │
-│  ada_server.py      │                  │   Touch input      │
-│  ├─ ada_brain.py    │    WebSocket     └────────────────────┘
-│  ├─ screen_engine   │◄───(8766)───────► Audio Client
-│  ├─ voice_pipeline  │   Raw PCM audio
-│  └─ tool_executor   │
-│                     │
-│  STT ◄──ws:8090──► moshi-server (Kyutai DSM)
-│  TTS ◄──ws:8089──► moshi-server (Kyutai DSM)
-│  LLM ◄──HTTPS───► OpenAI API (GPT-5.2 nano)
-└─────────────────────┘
+firmware/
+├── ada_particles.ino      # Main entry point
+├── config.h               # Hardware & tuning constants
+└── src/
+    ├── fixed_math.h/cpp   # 16.16 fixed-point arithmetic
+    ├── noise.h/cpp        # Simplex noise for organic motion
+    ├── sprites.h/cpp      # Pre-rendered soft particle sprites
+    ├── framebuffer.h/cpp  # PSRAM framebuffer with fade trail
+    ├── particle.h/cpp     # Particle data structure & pool
+    └── particle_system.h/cpp  # Main engine
 ```
 
-## What the Belly Screen Shows
+## Performance
 
-Not a face. Not eyes. **Contextual, ambient, whimsical content:**
+- **Target:** 30 FPS minimum
+- **Typical:** 35-45 FPS with 300 particles
+- **Memory:** ~700KB PSRAM used (framebuffer + particles + sprites)
 
-- 🌊 **Ambient** — Color breathing, sparkle particles, aurora waves
-- 🌧️ **Weather** — Animated weather for Flint, MI
-- 💻 **Code Rain** — Matrix-style falling characters (because raccoon)
-- 😈 **Emoji** — Giant animated emoji reactions
-- 💬 **Text** — Speech bubbles, witty status messages
-- 🤔 **Thinking** — Swirling galaxy/neural patterns while processing
-- 👂 **Listening** — Pulsing waveform when hearing you speak
-- 🎵 **Visualizer** — Audio-reactive bars/rings during TTS playback
+## Tuning
 
-## Hardware
+Key parameters in `config.h`:
 
-- **Display:** Waveshare ESP32-S3-Touch-AMOLED-1.75 (466×466 AMOLED, capacitive touch)
-- **Server GPU:** NVIDIA RTX 3060 12GB
-  - STT: ~2.5GB VRAM (Kyutai DSM)
-  - TTS: ~5.3GB VRAM (Kyutai DSM)
-  - LLM: API-based (no VRAM)
-- **Body:** A very cute raccoon stuffed animal
+```cpp
+// Particle behavior
+#define WANDER_STRENGTH 0.4f    // Noise influence on motion
+#define CENTER_PULL 0.0008f     // Attraction to center
+#define SPRING_K 0.06f          // Formation attraction strength
+#define DAMPING 0.97f           // Velocity damping
 
-## Quick Start
-
-```bash
-# 1. Start STT/TTS servers (moshi-server)
-# See /home/chase/delayed-streams-modeling/
-
-# 2. Start Ada's brain
-cd server
-pip install -r requirements.txt
-chmod +x start.sh
-./start.sh
-
-# 3. Flash the ESP32 (see firmware/README.md)
-# 4. Give her a squeeze
+// Visuals
+#define FADE_FACTOR 0.92f       // Trail persistence (higher = longer trails)
+#define DEFAULT_PARTICLE_COUNT 300
 ```
 
-## Ports
+## License
 
-| Service | Port | Protocol |
-|---------|------|----------|
-| Screen WebSocket | 8765 | ws:// JSON |
-| Audio WebSocket | 8766 | ws:// PCM |
-| STT (moshi) | 8090 | ws:// |
-| TTS (moshi) | 8089 | ws:// |
+MIT
 
-## Project Structure
+## Credits
 
-```
-AdaDesktopCompanion/
-├── README.md
-├── SCREEN.md              # Screen protocol & design spec
-├── server/
-│   ├── requirements.txt
-│   ├── config.py          # Ports, API keys, paths
-│   ├── ada_server.py      # Main WebSocket orchestrator
-│   ├── ada_brain.py       # Agent logic, mood, system prompt
-│   ├── screen_engine.py   # Display scene generator
-│   ├── voice_pipeline.py  # STT→LLM→TTS pipeline
-│   ├── tool_executor.py   # Weather, search, memory tools
-│   └── start.sh           # Launch script
-├── firmware/
-│   └── README.md          # ESP32 flash instructions
-└── .gitignore
-```
-
-## Who is Ada?
-
-A chaotic gremlin AI — part helpful assistant, part feral raccoon energy. Sarcastic but not insufferable. Competent when it counts. Will absolutely enable questionable ideas but also tell you when you're being dumb.
-
-Named after ADA from Satisfactory. 🦝
-
----
-
-*Built with love, caffeine, and questionable decisions by Ada & Chase.*
+- Ada & Chase
+- Inspired by [Codrops dreamy particle tutorial](https://tympanus.net/codrops/2024/12/19/crafting-a-dreamy-particle-effect-with-three-js-and-gpgpu/)
+- Simplex noise based on Stefan Gustavson's work
